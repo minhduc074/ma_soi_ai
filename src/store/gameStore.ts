@@ -110,6 +110,8 @@ interface GameStore extends GameState {
   addApiLog: (entry: Omit<ApiLogEntry, 'id'>) => void;
   ttsEnabled: boolean;
   setTtsEnabled: (v: boolean) => void;
+  ttsSpeaking: boolean;
+  setTtsSpeaking: (v: boolean) => void;
   daySummary: string | null;
   setDaySummary: (summary: string | null) => void;
 }
@@ -133,6 +135,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   isWhispering: false,
   apiLogs: [],
   ttsEnabled: false,
+  ttsSpeaking: false,
 
   /* ---- setup ---- */
   initGame(configs) {
@@ -321,6 +324,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   setTtsEnabled(v) {
     set({ ttsEnabled: v });
+  },
+  setTtsSpeaking(v) {
+    set({ ttsSpeaking: v });
   },
   setDaySummary(summary) {
     set({ daySummary: summary });
