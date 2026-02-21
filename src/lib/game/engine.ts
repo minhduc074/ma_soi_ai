@@ -45,7 +45,7 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
 
 /* helper: speak text via Web Speech API and wait for it to finish */
 function speakTTS(text: string): Promise<void> {
-  const { ttsEnabled } = useGameStore.getState();
+  const { ttsEnabled, setTtsSpeaking } = useGameStore.getState();
   if (!ttsEnabled || typeof window === 'undefined' || !window.speechSynthesis) {
     return Promise.resolve();
   }
@@ -55,9 +55,15 @@ function speakTTS(text: string): Promise<void> {
     const voice = getVietnameseVoice();
     if (voice) u.voice = voice;
     u.rate = 1.25;
-    u.onend = () => resolve();
-    u.onerror = () => resolve();
-    window.speechSynthesis.speak(u);
+    u.onend = () => { setTtsSpeaking(false); resolve(); };
+    u.onerror = () => { setTtsSpeaking(false); resolve(); };
+    try {
+      setTtsSpeaking(true);
+      window.speechSynthesis.speak(u);
+    } catch {
+      setTtsSpeaking(false);
+      resolve();
+    }
   });
 }
 
@@ -395,7 +401,7 @@ async function wolfTurn() {
       phase: 'night_wolf',
       dayCount: store().dayCount,
     });
-    await speakTTS(`${wolf.name} thì thầm: ${response.speech}`);
+    await speakTTS(`thì thầm: ${response.speech}`);
 
     if (response.action) {
       const target = findPlayerByName(
@@ -602,7 +608,7 @@ async function addThought(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(`${playerName} nghĩ: ${content}`);
+  await speakTTS(content);
 }
 
 async function addSpeech(playerName: string, content: string) {
@@ -614,7 +620,7 @@ async function addSpeech(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(`${playerName} nói: ${content}`);
+  await speakTTS(content);
 }
 
 function addLog(msg: Omit<ChatMessage, 'id' | 'timestamp'>) {

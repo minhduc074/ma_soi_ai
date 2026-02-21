@@ -416,6 +416,7 @@ export default function GamePage() {
   const setSpeed = useGameStore((s) => s.setSpeed);
   const setRunning = useGameStore((s) => s.setRunning);
   const isWhisperingState = useGameStore((s) => s.isWhispering);
+  const ttsSpeaking = useGameStore((s) => s.ttsSpeaking);
 
   const [filter, setFilter] = useState<FilterType>('all');
   const [showApiLog, setShowApiLog] = useState(false);
@@ -459,15 +460,15 @@ export default function GamePage() {
           : 'bg-gradient-to-br from-gray-900 via-amber-950/20 to-gray-900'
       } text-white`}
     >
-      {/* Dim overlay for whispering */}
+      {/* Dim overlay for TTS speaking */}
       <div
         className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-500 pointer-events-none ${
-          isWhisperingState ? 'opacity-100' : 'opacity-0'
+          ttsSpeaking ? 'opacity-100' : 'opacity-0'
         }`}
       />
 
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-md bg-black/40 border-b border-gray-700/50">
+      <header className="sticky top-0 z-50 backdrop-blur-sm bg-black/40 border-b border-gray-700/30 lg:backdrop-blur-md lg:border-gray-700/50">
         <div className="max-w-[1400px] mx-auto px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-base font-bold">🐺 Ma Sói AI</h1>
@@ -527,7 +528,7 @@ export default function GamePage() {
       </header>
 
       {/* Body */}
-      <div className="max-w-[1400px] mx-auto px-4 py-3 flex gap-4 h-[calc(100vh-48px)]">
+      <div className="max-w-[1400px] mx-auto px-2 lg:px-4 py-2 lg:py-3 flex flex-col lg:flex-row gap-3 lg:gap-4 lg:h-[calc(100vh-48px)] overflow-y-auto lg:overflow-hidden">
         {/* Left: Arena */}
         <div className="flex-1 flex flex-col items-center justify-center min-w-0">
           <CircularArena />
@@ -554,7 +555,7 @@ export default function GamePage() {
         </div>
 
         {/* Right: Chat / API Log */}
-        <div className="w-[420px] flex-shrink-0 flex flex-col min-w-0">
+        <div className="w-full lg:w-[420px] flex-shrink-0 flex flex-col min-w-0 min-h-[400px] lg:min-h-0">
           <div className="flex items-center justify-between mb-1.5">
             {showApiLog ? (
               <div className="flex items-center gap-2">
