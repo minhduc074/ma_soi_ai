@@ -43,9 +43,11 @@ function isNightPhase(phase: GamePhase) {
 function PlayerNode({
   player,
   isActive,
+  isSpeaking,
 }: {
   player: { id: string; name: string; role: Role; alive: boolean };
   isActive: boolean;
+  isSpeaking: boolean;
 }) {
   const roleInfo = ROLE_INFO[player.role];
   const color = ROLE_HEX[player.role];
@@ -83,6 +85,9 @@ function PlayerNode({
       >
         {roleInfo.name}
       </span>
+      {isSpeaking && (
+        <span className="text-[10px] text-green-400 animate-pulse" aria-label="Speaking" role="status">🔊</span>
+      )}
     </div>
   );
 }
@@ -94,6 +99,7 @@ function CircularArena() {
   const players = useGameStore((s) => s.players);
   const activePlayerId = useGameStore((s) => s.activePlayerId);
   const isWhispering = useGameStore((s) => s.isWhispering);
+  const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
   const phase = useGameStore((s) => s.phase);
   const dayCount = useGameStore((s) => s.dayCount);
   const night = isNightPhase(phase);
@@ -134,6 +140,7 @@ function CircularArena() {
         const x = 50 + radius * Math.cos(angle);
         const y = 50 + radius * Math.sin(angle);
         const active = player.id === activePlayerId;
+        const speaking = active && isSpeakingTTS;
 
         return (
           <div
@@ -143,7 +150,7 @@ function CircularArena() {
             }`}
             style={{ left: `${x}%`, top: `${y}%` }}
           >
-            <PlayerNode player={player} isActive={active} />
+            <PlayerNode player={player} isActive={active} isSpeaking={speaking} />
           </div>
         );
       })}
@@ -415,12 +422,12 @@ export default function GamePage() {
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
   const setRunning = useGameStore((s) => s.setRunning);
-  const isWhisperingState = useGameStore((s) => s.isWhispering);
 
   const [filter, setFilter] = useState<FilterType>('all');
   const [showApiLog, setShowApiLog] = useState(false);
   const ttsEnabled = useGameStore((s) => s.ttsEnabled);
   const setTtsEnabled = useGameStore((s) => s.setTtsEnabled);
+  const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
   const apiLogs = useGameStore((s) => s.apiLogs);
   const gameStartedRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -459,20 +466,20 @@ export default function GamePage() {
           : 'bg-gradient-to-br from-gray-900 via-amber-950/20 to-gray-900'
       } text-white`}
     >
-      {/* Dim overlay for whispering */}
+      {/* Dim overlay — only when TTS is speaking, does NOT cover the chat panel */}
       <div
         className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-500 pointer-events-none ${
-          isWhisperingState ? 'opacity-100' : 'opacity-0'
+          isSpeakingTTS ? 'opacity-100' : 'opacity-0'
         }`}
       />
 
       {/* Header */}
       <header className="sticky top-0 z-50 backdrop-blur-md bg-black/40 border-b border-gray-700/50">
-        <div className="max-w-[1400px] mx-auto px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-base font-bold">🐺 Ma Sói AI</h1>
+        <div className="max-w-[1400px] mx-auto px-3 md:px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2 md:gap-3">
+            <h1 className="text-sm md:text-base font-bold">🐺 Ma Sói AI</h1>
             <span
-              className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              className={`text-xs px-2 py-0.5 rounded-full font-medium hidden sm:inline ${
                 night
                   ? 'bg-indigo-800 text-indigo-200'
                   : 'bg-amber-800 text-amber-200'
@@ -481,8 +488,8 @@ export default function GamePage() {
               {PHASE_LABELS[phase]}
             </span>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400">
               <span>⏱</span>
               <input
                 type="range"
@@ -527,11 +534,13 @@ export default function GamePage() {
       </header>
 
       {/* Body */}
-      <div className="max-w-[1400px] mx-auto px-4 py-3 flex gap-4 h-[calc(100vh-48px)]">
+      <div className="max-w-[1400px] mx-auto px-3 md:px-4 py-3 flex flex-col md:flex-row gap-3 md:gap-4 md:h-[calc(100vh-48px)]">
         {/* Left: Arena */}
-        <div className="flex-1 flex flex-col items-center justify-center min-w-0">
-          <CircularArena />
-          <div className="mt-3 flex gap-4 text-xs text-gray-400">
+        <div className="md:flex-1 flex flex-col items-center justify-center min-w-0">
+          <div className="w-full max-w-[320px] sm:max-w-[420px] md:max-w-[520px]">
+            <CircularArena />
+          </div>
+          <div className="mt-2 md:mt-3 flex gap-4 text-xs text-gray-400">
             <span>
               Sống:{' '}
               <b className="text-white">
@@ -553,8 +562,8 @@ export default function GamePage() {
           </div>
         </div>
 
-        {/* Right: Chat / API Log */}
-        <div className="w-[420px] flex-shrink-0 flex flex-col min-w-0">
+        {/* Right: Chat / API Log — z-50 so it appears above the dim overlay */}
+        <div className="relative z-50 md:w-[420px] flex-shrink-0 flex flex-col min-w-0 min-h-[200px] max-h-[45vh] md:max-h-none md:h-auto">
           <div className="flex items-center justify-between mb-1.5">
             {showApiLog ? (
               <div className="flex items-center gap-2">
