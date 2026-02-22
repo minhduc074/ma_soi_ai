@@ -3,7 +3,13 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { LLMProvider, PlayerConfig, SavedGame } from '@/lib/types';
+import { BlackjackPlayerConfig } from '@/lib/blackjack/types';
+import { XitoPlayerConfig } from '@/lib/xito/types';
 import { useGameStore } from '@/store/gameStore';
+import { useBlackjackStore } from '@/store/blackjackStore';
+import { useXitoStore } from '@/store/xitoStore';
+
+type GameMode = 'werewolf' | 'blackjack' | 'xito';
 
 const PROVIDERS: { value: LLMProvider; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
@@ -75,7 +81,10 @@ export default function SetupPage() {
   const router = useRouter();
   const initGame = useGameStore((s) => s.initGame);
   const loadSavedGame = useGameStore((s) => s.loadSavedGame);
+  const initBlackjackGame = useBlackjackStore((s) => s.initGame);
+  const initXitoGame = useXitoStore((s) => s.initGame);
 
+  const [gameMode, setGameMode] = useState<GameMode>('werewolf');
   const [players, setPlayers] = useState<PlayerConfig[]>(() =>
     Array.from({ length: PRESET_PLAYERS.length }, (_, i) => createDefaultPlayer(i)),
   );
@@ -142,6 +151,53 @@ export default function SetupPage() {
     router.push(`/game?background=${runInBackground}`);
   };
 
+  const startBlackjack = () => {
+    if (!globalApiKey) {
+      alert('Vui lòng nhập API Key ở phần Cài đặt chung.');
+      return;
+    }
+    // For blackjack, first player is dealer, rest are players
+    // Need at least 2 players (1 dealer + 1 player)
+    if (players.length < 2) {
+      alert('Cần ít nhất 2 người chơi (1 nhà cái + 1 người chơi)');
+      return;
+    }
+    const finalPlayers: BlackjackPlayerConfig[] = players.slice(0, 5).map((p) => ({
+      id: p.id,
+      name: p.name,
+      provider: p.provider,
+      model: p.model,
+      apiKey: p.apiKey || globalApiKey,
+      baseUrl: p.baseUrl,
+      personality: p.personality,
+    }));
+    initBlackjackGame(finalPlayers);
+    router.push(`/blackjack?background=${runInBackground}`);
+  };
+
+  const startXito = () => {
+    if (!globalApiKey) {
+      alert('Vui lòng nhập API Key ở phần Cài đặt chung.');
+      return;
+    }
+    // For Xito, need at least 2 players
+    if (players.length < 2) {
+      alert('Cần ít nhất 2 người chơi');
+      return;
+    }
+    const finalPlayers: XitoPlayerConfig[] = players.slice(0, 6).map((p) => ({
+      id: p.id,
+      name: p.name,
+      provider: p.provider,
+      model: p.model,
+      apiKey: p.apiKey || globalApiKey,
+      baseUrl: p.baseUrl,
+      personality: p.personality,
+    }));
+    initXitoGame(finalPlayers);
+    router.push(`/xito?background=${runInBackground}`);
+  };
+
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -173,9 +229,52 @@ export default function SetupPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-5xl font-bold mb-2">
-            🐺 <span className="bg-gradient-to-r from-red-400 to-purple-400 bg-clip-text text-transparent">Ma Sói AI</span>
+            {gameMode === 'werewolf' ? '🐺' : gameMode === 'blackjack' ? '🃏' : '🎰'}{' '}
+            <span className="bg-gradient-to-r from-red-400 to-purple-400 bg-clip-text text-transparent">
+              {gameMode === 'werewolf' ? 'Ma Sói AI' : gameMode === 'blackjack' ? 'Xì Dách AI' : 'Stud Poker AI'}
+            </span>
           </h1>
-          <p className="text-gray-400 text-lg">Các AI tự chơi Ma Sói với nhau – Quan sát cuộc chiến trí tuệ!</p>
+          <p className="text-gray-400 text-lg">
+            {gameMode === 'werewolf' 
+              ? 'Các AI tự chơi Ma Sói với nhau – Quan sát cuộc chiến trí tuệ!'
+              : gameMode === 'blackjack'
+              ? 'Các AI chơi Xì Dách – Quan sát chiến thuật lừa gạt bằng biểu cảm!'
+              : 'Các AI chơi Stud Poker (Xì Tố) – mở đầu 2 ngửa 1 úp, không đổi bài!'}
+          </p>
+          
+          {/* Game Mode Selector */}
+          <div className="flex justify-center gap-4 mt-6">
+            <button
+              onClick={() => setGameMode('werewolf')}
+              className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+                gameMode === 'werewolf'
+                  ? 'bg-red-600 text-white shadow-lg shadow-red-500/30'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              🐺 Ma Sói
+            </button>
+            <button
+              onClick={() => setGameMode('blackjack')}
+              className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+                gameMode === 'blackjack'
+                  ? 'bg-green-600 text-white shadow-lg shadow-green-500/30'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              🃏 Xì Dách
+            </button>
+            <button
+              onClick={() => setGameMode('xito')}
+              className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+                gameMode === 'xito'
+                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              🎰 Stud Poker
+            </button>
+          </div>
         </div>
 
         {/* Global Settings */}
@@ -302,7 +401,11 @@ export default function SetupPage() {
           </div>
 
           <p className="text-xs text-gray-500 mt-3">
-            Tối thiểu 4, tối đa 12 người chơi. Vai trò sẽ được phân bổ tự động dựa trên số lượng.
+            {gameMode === 'werewolf' 
+              ? 'Tối thiểu 4, tối đa 12 người chơi. Vai trò sẽ được phân bổ tự động dựa trên số lượng.'
+              : gameMode === 'blackjack'
+              ? 'Tối thiểu 2, tối đa 5 người chơi. Người đầu tiên là Nhà Cái, còn lại là người chơi.'
+              : 'Tối thiểu 2, tối đa 6 người chơi. Luật Stud: chia 3 lá đầu (2 ngửa + 1 úp), lật thêm mỗi vòng, không đổi bài.'}
           </p>
         </div>
 
@@ -333,10 +436,16 @@ export default function SetupPage() {
           </div>
 
           <button
-            onClick={startGame}
-            className="bg-gradient-to-r from-red-600 to-purple-600 hover:from-red-500 hover:to-purple-500 text-white text-xl font-bold py-4 px-12 rounded-xl shadow-lg shadow-purple-500/25 transition-all transform hover:scale-105"
+            onClick={gameMode === 'werewolf' ? startGame : gameMode === 'blackjack' ? startBlackjack : startXito}
+            className={`text-white text-xl font-bold py-4 px-12 rounded-xl shadow-lg transition-all transform hover:scale-105 ${
+              gameMode === 'werewolf'
+                ? 'bg-gradient-to-r from-red-600 to-purple-600 hover:from-red-500 hover:to-purple-500 shadow-purple-500/25'
+                : gameMode === 'blackjack'
+                ? 'bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-500 hover:to-teal-500 shadow-green-500/25'
+                : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 shadow-purple-500/25'
+            }`}
           >
-            🎮 Bắt đầu trò chơi
+            🎮 {gameMode === 'werewolf' ? 'Bắt đầu Ma Sói' : gameMode === 'blackjack' ? 'Bắt đầu Xì Dách' : 'Bắt đầu Stud Poker'}
           </button>
         </div>
 

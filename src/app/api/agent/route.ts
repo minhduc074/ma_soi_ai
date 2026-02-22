@@ -11,6 +11,14 @@ interface AgentRequestBody {
   baseUrl?: string; // custom base URL for cliproxyapi
 }
 
+interface ParsedAgentPayload {
+  thought?: string;
+  speech?: string;
+  action?: string;
+  expression?: string;
+  raiseAmount?: number;
+}
+
 /* ------------------------------------------------------------------ */
 /*  OpenRouter key info + retry helper                                */
 /* ------------------------------------------------------------------ */
@@ -240,22 +248,25 @@ export async function POST(request: NextRequest) {
     console.log(`[agent] ✓ ${provider}/${model} +${Date.now() - t0}ms raw=${raw.slice(0, 120).replace(/\n/g, ' ')}`);
 
     // Try to extract JSON from response
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const normalized = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
+    const jsonMatch = normalized.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`[agent] no JSON in response, returning raw text`);
-      return NextResponse.json({ thought: '', speech: raw.trim(), action: '' });
+      return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔' });
     }
 
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]) as ParsedAgentPayload;
       return NextResponse.json({
-        thought: parsed.thought ?? '',
-        speech: parsed.speech ?? '',
-        action: parsed.action ?? '',
+        thought: typeof parsed.thought === 'string' ? parsed.thought : '',
+        speech: typeof parsed.speech === 'string' ? parsed.speech : '',
+        action: typeof parsed.action === 'string' ? parsed.action : '',
+        expression: typeof parsed.expression === 'string' ? parsed.expression : '🤔',
+        raiseAmount: typeof parsed.raiseAmount === 'number' ? parsed.raiseAmount : 0,
       });
     } catch (parseErr) {
       console.warn(`[agent] JSON parse failed: ${parseErr}, returning raw text`);
-      return NextResponse.json({ thought: '', speech: raw.trim(), action: '' });
+      return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔', raiseAmount: 0 });
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

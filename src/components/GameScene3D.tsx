@@ -2,7 +2,7 @@
 
 import React, { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Text, Environment, ContactShadows, Float } from '@react-three/drei';
+import { CameraControls, Text, Environment, ContactShadows } from '@react-three/drei';
 import * as THREE from 'three';
 import { useGameStore } from '@/store/gameStore';
 import { Role, ROLE_INFO, GamePhase } from '@/lib/types';
@@ -26,19 +26,22 @@ function isNightPhase(phase: GamePhase) {
 function Player3D({
   player,
   position,
-  isActive,
-  isSpeaking,
+  focusState,
+  dimmed,
 }: {
   player: { id: string; name: string; role: Role; alive: boolean };
   position: [number, number, number];
-  isActive: boolean;
-  isSpeaking: boolean;
+  focusState: 'idle' | 'active' | 'speaking' | 'thinking';
+  dimmed: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
   const roleInfo = ROLE_INFO[player.role];
   const color = ROLE_COLORS[player.role];
   const isDead = !player.alive;
+  const isActive = focusState !== 'idle';
+  const isSpeaking = focusState === 'speaking';
+  const isThinking = focusState === 'thinking';
 
   // Animation for active/speaking state
   useFrame((state) => {
@@ -54,15 +57,30 @@ function Player3D({
       
       if (isActive) {
         // Active player bounces slightly
-        const bounce = Math.sin(state.clock.elapsedTime * 5) * 0.2;
+        const speed = isThinking ? 3 : 5;
+        const amplitude = isThinking ? 0.12 : 0.2;
+        const bounce = Math.sin(state.clock.elapsedTime * speed) * amplitude;
         groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, 1 + bounce, 0.1);
         
-        // Rotate slightly
-        meshRef.current.rotation.y += 0.02;
+        // Subtle body sway while keeping face-to-camera heading stable
+        meshRef.current.rotation.z = THREE.MathUtils.lerp(
+          meshRef.current.rotation.z,
+          Math.sin(state.clock.elapsedTime * 3) * (isThinking ? 0.04 : 0.07),
+          0.12,
+        );
       } else {
         groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, 1, 0.1);
-        meshRef.current.rotation.y = THREE.MathUtils.lerp(meshRef.current.rotation.y, 0, 0.1);
+        meshRef.current.rotation.z = THREE.MathUtils.lerp(meshRef.current.rotation.z, 0, 0.1);
       }
+
+      const targetScale = isActive ? (isSpeaking ? 1.08 : 1.04) : 1;
+      groupRef.current.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.08);
+
+      // Always orient player toward camera.
+      const dx = state.camera.position.x - groupRef.current.position.x;
+      const dz = state.camera.position.z - groupRef.current.position.z;
+      const targetYaw = Math.atan2(dx, dz);
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, targetYaw, 0.14);
     }
   });
 
@@ -75,8 +93,10 @@ function Player3D({
           color={isDead ? '#4b5563' : color} 
           roughness={0.3}
           metalness={0.2}
-          emissive={isActive && !isDead ? color : '#000000'}
-          emissiveIntensity={isActive ? 0.5 : 0}
+          emissive={isActive && !isDead ? (isThinking ? '#38bdf8' : color) : '#000000'}
+          emissiveIntensity={isActive ? (isSpeaking ? 0.7 : 0.45) : 0}
+          transparent={dimmed}
+          opacity={dimmed ? 0.35 : 1}
         />
       </mesh>
 
@@ -85,6 +105,14 @@ function Player3D({
         <mesh position={[0, 1.2, 0]}>
           <torusGeometry args={[0.3, 0.05, 16, 32]} />
           <meshBasicMaterial color="#4ade80" />
+        </mesh>
+      )}
+
+      {/* Thinking Indicator */}
+      {isThinking && !isDead && (
+        <mesh position={[0, 1.2, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.34, 0.03, 16, 64]} />
+          <meshBasicMaterial color="#38bdf8" />
         </mesh>
       )}
 
@@ -176,6 +204,64 @@ function Environment3D({ isNight }: { isNight: boolean }) {
   );
 }
 
+function CinematicCameraController({
+  activePlayerId,
+  isSpeaking,
+  isThinking,
+  playerPositions,
+  players,
+  isNight,
+}: {
+  activePlayerId: string | null;
+  isSpeaking: boolean;
+  isThinking: boolean;
+  playerPositions: [number, number, number][];
+  players: { id: string }[];
+  isNight: boolean;
+}) {
+  const controlsRef = useRef<any>(null);
+
+  React.useEffect(() => {
+    if (!controlsRef.current) return;
+
+    if (!activePlayerId) {
+      controlsRef.current.setLookAt(0, isNight ? 6.8 : 6.2, isNight ? 9.5 : 8.5, 0, 0.8, 0, true);
+      return;
+    }
+
+    const activeIndex = players.findIndex((p) => p.id === activePlayerId);
+    if (activeIndex < 0 || !playerPositions[activeIndex]) {
+      controlsRef.current.setLookAt(0, 6.5, 9, 0, 0.8, 0, true);
+      return;
+    }
+
+    const [x, y, z] = playerPositions[activeIndex];
+    const norm = Math.sqrt(x * x + z * z) || 1;
+    const dirX = x / norm;
+    const dirZ = z / norm;
+
+    const shotDistance = isThinking ? 2.2 : isSpeaking ? 2.8 : 3.4;
+    const sideOffset = isThinking ? 0.8 : 0.45;
+    const camX = x + dirX * shotDistance - dirZ * sideOffset;
+    const camY = y + (isThinking ? 1.8 : 1.6);
+    const camZ = z + dirZ * shotDistance + dirX * sideOffset;
+    const lookY = y + (isThinking ? 1.05 : 0.85);
+
+    controlsRef.current.setLookAt(camX, camY, camZ, x, lookY, z, true);
+  }, [activePlayerId, isNight, isSpeaking, isThinking, playerPositions, players]);
+
+  return (
+    <CameraControls
+      ref={controlsRef}
+      smoothTime={0.75}
+      minPolarAngle={Math.PI / 5}
+      maxPolarAngle={Math.PI / 2.15}
+      minDistance={2.5}
+      maxDistance={14}
+    />
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main GameScene3D Component                                         */
 /* ------------------------------------------------------------------ */
@@ -183,6 +269,7 @@ export default function GameScene3D() {
   const players = useGameStore((s) => s.players);
   const activePlayerId = useGameStore((s) => s.activePlayerId);
   const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
+  const isThinkingTTS = useGameStore((s) => s.isThinkingTTS);
   const phase = useGameStore((s) => s.phase);
   const isNight = isNightPhase(phase);
 
@@ -209,27 +296,32 @@ export default function GameScene3D() {
 
         {/* Players */}
         {players.map((player, index) => {
-          const active = player.id === activePlayerId;
-          const speaking = active && isSpeakingTTS;
+          const isActive = player.id === activePlayerId;
+          let focusState: 'idle' | 'active' | 'speaking' | 'thinking' = 'idle';
+          if (isActive) {
+            focusState = isSpeakingTTS ? (isThinkingTTS ? 'thinking' : 'speaking') : 'active';
+          }
+          const dimmed = !!activePlayerId && !isActive;
 
           return (
             <Player3D
               key={player.id}
               player={player}
               position={playerPositions[index]}
-              isActive={active}
-              isSpeaking={speaking}
+              focusState={focusState}
+              dimmed={dimmed}
             />
           );
         })}
 
-        {/* Controls */}
-        <OrbitControls 
-          enablePan={false}
-          minPolarAngle={Math.PI / 6}
-          maxPolarAngle={Math.PI / 2.1}
-          minDistance={4}
-          maxDistance={15}
+        {/* Cinematic camera */}
+        <CinematicCameraController
+          activePlayerId={activePlayerId}
+          isSpeaking={isSpeakingTTS}
+          isThinking={isThinkingTTS}
+          playerPositions={playerPositions}
+          players={players}
+          isNight={isNight}
         />
       </Canvas>
     </div>
