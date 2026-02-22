@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import {
   ApiLogEntry,
   ChatMessage,
+  DayVoteRecord,
   GamePhase,
   GameState,
   NightResult,
@@ -11,6 +12,7 @@ import {
   PlayerConfig,
   Role,
   ROLE_INFO,
+  SavedGame,
 } from '@/lib/types';
 
 /* ---------- helpers ---------- */
@@ -80,6 +82,15 @@ function emptyNightResult(): NightResult {
 interface GameStore extends GameState {
   // setup
   initGame: (configs: PlayerConfig[]) => void;
+  loadSavedGame: (saved: SavedGame) => void;
+  exportSavedGame: () => SavedGame;
+  // replay
+  replayLogs: ChatMessage[];
+  replayIndex: number;
+  replayApiLogs: ApiLogEntry[];
+  set_replayStep: (log: ChatMessage) => void;
+  startReplay: () => Promise<void>;
+  stopReplay: () => void;
   // phase control
   setPhase: (phase: GamePhase) => void;
   nextDay: () => void;
@@ -110,10 +121,23 @@ interface GameStore extends GameState {
   addApiLog: (entry: Omit<ApiLogEntry, 'id'>) => void;
   ttsEnabled: boolean;
   setTtsEnabled: (v: boolean) => void;
+  isSimulating: boolean;
+  setSimulating: (v: boolean) => void;
+  isReplayMode: boolean;
+  setReplayMode: (v: boolean) => void;
+  isReplaying: boolean;
+  setReplaying: (v: boolean) => void;
   isSpeakingTTS: boolean;
   setIsSpeakingTTS: (v: boolean) => void;
+  isThinkingTTS: boolean;
+  setIsThinkingTTS: (v: boolean) => void;
+  thoughtProbability: number;
+  setThoughtProbability: (v: number) => void;
   daySummary: string | null;
   setDaySummary: (summary: string | null) => void;
+  // Vote history
+  voteHistory: DayVoteRecord[];
+  addVoteRecord: (record: DayVoteRecord) => void;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -135,7 +159,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   isWhispering: false,
   apiLogs: [],
   ttsEnabled: false,
+  isSimulating: false,
+  isReplayMode: false,
+  isReplaying: false,
   isSpeakingTTS: false,
+  isThinkingTTS: false,
+  thoughtProbability: 40,
+  voteHistory: [],
+  replayLogs: [],
+  replayIndex: 0,
+  replayApiLogs: [],
 
   /* ---- setup ---- */
   initGame(configs) {
@@ -162,7 +195,60 @@ export const useGameStore = create<GameStore>((set, get) => ({
       apiLogs: [],
       daySummary: null,
       isRunning: true,
+      voteHistory: [],
+      isSimulating: false,
+      isReplayMode: false,
+      isReplaying: false,
+      isSpeakingTTS: false,
+      isThinkingTTS: false,
+      replayLogs: [],
+      replayIndex: 0,
+      replayApiLogs: [],
     });
+  },
+
+  loadSavedGame(saved) {
+    // Reset players to alive state initially
+    const resetPlayers = saved.players.map((p) => ({ ...p, alive: true }));
+    set({
+      players: resetPlayers,
+      phase: 'night_start',
+      dayCount: 1,
+      logs: [],
+      nightResult: emptyNightResult(),
+      winner: null,
+      witchHasHeal: true,
+      witchHasPoison: true,
+      lastGuardTarget: null,
+      votes: {},
+      activePlayerId: null,
+      isWhispering: false,
+      apiLogs: [],
+      daySummary: null,
+      isRunning: true,
+      voteHistory: [],
+      isSimulating: false,
+      isReplayMode: true,
+      isReplaying: false,
+      isSpeakingTTS: false,
+      isThinkingTTS: false,
+      replayLogs: saved.logs,
+      replayIndex: 0,
+      replayApiLogs: saved.apiLogs || [],
+    });
+  },
+
+  exportSavedGame() {
+    const s = get();
+    return {
+      version: 1,
+      createdAt: Date.now(),
+      players: s.players,
+      logs: s.logs,
+      voteHistory: s.voteHistory,
+      winner: s.winner,
+      apiLogs: s.apiLogs,
+    };
   },
 
   /* ---- phase ---- */
@@ -316,6 +402,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ votes: {} });
   },
   setActivePlayer(id, whispering = false) {
+    // Allow during replay; block only during background simulation
+    if (get().isSimulating) return;
     set({ activePlayerId: id, isWhispering: whispering });
   },
   addApiLog(entry) {
@@ -325,10 +413,119 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setTtsEnabled(v) {
     set({ ttsEnabled: v });
   },
+  setSimulating(v) {
+    set({ isSimulating: v });
+  },
+  setReplayMode(v) {
+    set({ isReplayMode: v });
+  },
+  setReplaying(v) {
+    set({ isReplaying: v });
+  },
+  set_replayStep(log) {
+    set((s) => ({
+      logs: [...s.logs, log],
+      phase: log.phase,
+      dayCount: log.dayCount,
+      replayIndex: s.replayIndex + 1,
+    }));
+  },
+  async startReplay() {
+    const state = get();
+    if (state.isReplaying || state.replayIndex >= state.replayLogs.length) return;
+    
+    set({ isReplaying: true });
+    
+    const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    
+    while (get().isReplaying && get().replayIndex < get().replayLogs.length) {
+      const currentState = get();
+      const log = currentState.replayLogs[currentState.replayIndex];
+      
+      // Update phase and dayCount from log
+      set((s) => ({
+        logs: [...s.logs, log],
+        phase: log.phase,
+        dayCount: log.dayCount,
+        replayIndex: s.replayIndex + 1,
+      }));
+      
+      // Find player and set active
+      if (log.sender !== 'system') {
+        const player = currentState.players.find((p) => p.name === log.sender);
+        if (player) {
+          set({ activePlayerId: player.id, isWhispering: log.type === 'whisper' });
+        }
+      }
+      
+      // Handle player deaths from system messages
+      if (log.type === 'system' && log.content.includes('đã bị loại')) {
+        // Find player names in the death message and mark them dead
+        const players = get().players;
+        for (const p of players) {
+          if (log.content.includes(p.name) && p.alive) {
+            set((s) => ({
+              players: s.players.map((pl) =>
+                pl.id === p.id ? { ...pl, alive: false } : pl
+              ),
+            }));
+          }
+        }
+      }
+      
+      // Handle elimination from voting
+      if (log.type === 'system' && log.content.includes('bị trục xuất')) {
+        const players = get().players;
+        for (const p of players) {
+          if (log.content.includes(p.name) && p.alive) {
+            set((s) => ({
+              players: s.players.map((pl) =>
+                pl.id === p.id ? { ...pl, alive: false } : pl
+              ),
+            }));
+          }
+        }
+      }
+      
+      // Check for winner announcement
+      if (log.type === 'system' && log.content.includes('THẮNG')) {
+        if (log.content.includes('SÓI')) {
+          set({ winner: 'wolf', phase: 'game_over', isRunning: false });
+        } else if (log.content.includes('LÀNG')) {
+          set({ winner: 'village', phase: 'game_over', isRunning: false });
+        }
+      }
+      
+      // Calculate delay based on message type and speed setting
+      const speed = currentState.speed;
+      let waitTime = speed / 2;
+      if (log.type === 'speech') waitTime = speed;
+      else if (log.type === 'thought') waitTime = speed / 2;
+      else if (log.type === 'system') waitTime = speed / 3;
+      else if (log.type === 'vote') waitTime = speed / 4;
+      
+      await delay(waitTime);
+      set({ activePlayerId: null });
+    }
+    
+    set({ isReplaying: false, isRunning: false });
+  },
+  stopReplay() {
+    set({ isReplaying: false });
+  },
   setIsSpeakingTTS(v) {
     set({ isSpeakingTTS: v });
   },
+  setIsThinkingTTS(v) {
+    set({ isThinkingTTS: v });
+  },
+  setThoughtProbability(v) {
+    set({ thoughtProbability: v });
+  },
   setDaySummary(summary) {
     set({ daySummary: summary });
+  },
+  addVoteRecord(record) {
+    set((s) => ({ voteHistory: [...s.voteHistory, record] }));
   },
 }));

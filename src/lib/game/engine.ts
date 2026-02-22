@@ -9,11 +9,26 @@ import {
   buildVotePrompt,
   buildHunterPrompt,
   buildSummaryPrompt,
+  buildRebuttalPrompt,
+  buildLastWordsPrompt,
 } from '@/lib/llm/agent';
 import { AgentResponse, ChatMessage, Player, ROLE_INFO } from '@/lib/types';
 
-/* helper: wait for `ms` milliseconds */
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/* helper: background simulation mode flag */
+let _backgroundMode = false;
+
+/* helper: wait for `ms` milliseconds (skipped in background mode) */
+const delay = (ms: number) => _backgroundMode ? Promise.resolve() : new Promise((r) => setTimeout(r, ms));
+
+/* helper: shuffle array (Fisher-Yates) */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 /* helper: find and cache the best Vietnamese voice */
 let cachedViVoice: SpeechSynthesisVoice | null | undefined; // undefined = not yet searched
@@ -44,8 +59,9 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
 }
 
 /* helper: speak text via Web Speech API and wait for it to finish */
-function speakTTS(text: string): Promise<void> {
-  const { ttsEnabled, setIsSpeakingTTS } = useGameStore.getState();
+function speakTTS(text: string, isThought = false): Promise<void> {
+  if (_backgroundMode) return Promise.resolve();
+  const { ttsEnabled, setIsSpeakingTTS, setIsThinkingTTS } = useGameStore.getState();
   if (!ttsEnabled || typeof window === 'undefined' || !window.speechSynthesis) {
     return Promise.resolve();
   }
@@ -53,14 +69,15 @@ function speakTTS(text: string): Promise<void> {
   const cleanText = text.replace(/^\[[^\]]+\]\s*/, '').trim();
   if (!cleanText) return Promise.resolve();
   setIsSpeakingTTS(true);
+  setIsThinkingTTS(isThought);
   return new Promise<void>((resolve) => {
     const u = new SpeechSynthesisUtterance(cleanText);
     u.lang = 'vi-VN';
     const voice = getVietnameseVoice();
     if (voice) u.voice = voice;
     u.rate = 1.25;
-    u.onend = () => { setIsSpeakingTTS(false); resolve(); };
-    u.onerror = () => { setIsSpeakingTTS(false); resolve(); };
+    u.onend = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
+    u.onerror = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
     window.speechSynthesis.speak(u);
   });
 }
@@ -98,8 +115,11 @@ function getPlayerNightNotes(playerName: string): string {
 /* ------------------------------------------------------------------ */
 /*  MAIN GAME LOOP                                                     */
 /* ------------------------------------------------------------------ */
-export async function runGameLoop() {
+export async function runGameLoop(backgroundMode = false) {
+  _backgroundMode = backgroundMode;
   const store = useGameStore.getState;
+
+  if (backgroundMode) store().setSimulating(true);
 
   addSystemLog('🎮 Trò chơi Ma Sói bắt đầu! Đêm đầu tiên đang đến…');
 
@@ -119,6 +139,84 @@ export async function runGameLoop() {
 
     useGameStore.getState().nextDay();
   }
+
+  _backgroundMode = false;
+  if (backgroundMode) store().setSimulating(false);
+}
+
+/* ================================================================== */
+/*  REPLAY LOOP — replays saved logs with TTS, respecting pause        */
+/* ================================================================== */
+export async function runReplay() {
+  const store = useGameStore.getState;
+  store().setReplaying(true);
+
+  const delayMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  while (store().isReplaying && store().replayIndex < store().replayLogs.length) {
+    const s = store();
+    const log = s.replayLogs[s.replayIndex];
+
+    // Append log & advance pointer
+    store().set_replayStep(log);
+
+    // Highlight active player
+    if (log.sender !== 'system') {
+      const player = store().players.find((p) => p.name === log.sender);
+      if (player) {
+        useGameStore.getState().setActivePlayer(player.id, log.type === 'whisper');
+      }
+    }
+
+    // Speak with TTS (waits until done)
+    if (log.type !== 'system' && log.type !== 'vote') {
+      await speakTTS(log.content, log.type === 'thought');
+    }
+
+    // Handle deaths from system messages — match ONLY specific structured announcements
+    // to avoid false-killing players when AI summaries mention names near "bị loại"
+    if (log.type === 'system') {
+      const players = store().players;
+
+      // Night death:    "☀️ Trời sáng. Đêm qua, NAME (role) đã bị loại!"
+      // Vote execution: "⚖️ NAME bị trục xuất! Vai trò: …"
+      // Hunter kill:    "🏹 hunterName đã kéo theo TARGETNAME! (role)"
+      const isNightDeath =
+        log.content.includes('đã bị loại') &&
+        (log.content.startsWith('☀️') || log.content.includes('Trời sáng'));
+      const isVoteExecution =
+        log.content.startsWith('⚖️') && log.content.includes('bị trục xuất');
+      const isHunterKill =
+        log.content.startsWith('🏹') && log.content.includes('kéo theo');
+
+      if (isNightDeath || isVoteExecution || isHunterKill) {
+        for (const p of players) {
+          if (p.alive && log.content.includes(p.name)) {
+            useGameStore.getState().killPlayer(p.id);
+          }
+        }
+      }
+
+      if (log.content.includes('THẮNG')) {
+        if (log.content.includes('SÓI')) useGameStore.getState().setWinner('wolf');
+        else if (log.content.includes('LÀNG')) useGameStore.getState().setWinner('village');
+      }
+    }
+
+    // Delay based on message type
+    const speed = store().speed;
+    const waitTime =
+      log.type === 'speech' ? speed :
+      log.type === 'thought' ? speed * 0.6 :
+      log.type === 'whisper' ? speed * 0.8 :
+      log.type === 'vote'    ? speed * 0.25 :
+      speed * 0.35; // system
+
+    await delayMs(waitTime);
+    useGameStore.getState().setActivePlayer(null);
+  }
+
+  store().setReplaying(false);
 }
 
 /* ================================================================== */
@@ -151,14 +249,14 @@ async function nightPhase() {
   store().setPhase('day_announcement');
 
   if (deaths.length === 0) {
-    addSystemLog('☀️ Trời sáng. Đêm qua là một đêm bình yên – không ai bị giết!');
+    addSystemLog('☀️ Trời sáng. Đêm qua là một đêm bình yên – không ai bị loại!');
   } else {
     const names = deaths.map((id) => {
       const p = store().players.find((pl) => pl.id === id);
       if (!p) return id;
       return `${p.name} (${ROLE_INFO[p.role].emoji} ${ROLE_INFO[p.role].name})`;
     });
-    addSystemLog(`☀️ Trời sáng. Đêm qua, ${names.join(' và ')} đã bị giết!`);
+    addSystemLog(`☀️ Trời sáng. Đêm qua, ${names.join(' và ')} đã bị loại!`);
 
     for (const id of deaths) {
       const p = store().players.find((pl) => pl.id === id);
@@ -178,7 +276,7 @@ async function dayPhase() {
   const store = useGameStore.getState;
   const dayCount = store().dayCount;
 
-  // ---- Generate public summary for this day ----
+  // ---- Generate public summary for this day (with vote history) ----
   const summaryPlayer = store().players.find((p) => p.alive);
   let daySummary: string | null = null;
   if (summaryPlayer) {
@@ -187,10 +285,11 @@ async function dayPhase() {
       store().logs,
       dayCount,
       store().players.filter((p) => !p.alive).map((p) => ({ name: p.name, role: ROLE_INFO[p.role].name })),
+      store().voteHistory,
+      store().players,
     );
     try {
       const summaryRes = await callAgent(summaryPlayer, system, user);
-      // summary model returns plain text in speech field (no JSON action needed)
       daySummary = summaryRes.speech || summaryRes.thought || null;
     } catch {
       daySummary = null;
@@ -201,7 +300,7 @@ async function dayPhase() {
     }
   }
 
-  // ---- Discussion ----
+  // ---- Discussion Round 1 ----
   store().setPhase('day_discussion');
   addSystemLog(`💬 Ngày ${dayCount} – Phiên thảo luận bắt đầu.`);
   await delay(store().speed);
@@ -214,12 +313,14 @@ async function dayPhase() {
 
   // Pipelined discussion: prefetch next player's API call during display delay
   let prefetchPromise: Promise<AgentResponse> | null = null;
+  const discussionOrder = shuffle(alivePlayers);
 
-  for (let i = 0; i < alivePlayers.length; i++) {
+  for (let i = 0; i < discussionOrder.length; i++) {
     if (!store().isRunning) return;
-    const player = alivePlayers[i];
+    const player = discussionOrder[i];
 
     store().setActivePlayer(player.id, true);
+    const includeThought = Math.random() * 100 < store().thoughtProbability;
 
     let response: AgentResponse;
     if (prefetchPromise) {
@@ -232,27 +333,92 @@ async function dayPhase() {
         store().logs,
         deathNames,
         dayCount,
+        includeThought,
         getPlayerNightNotes(player.name),
         daySummary ?? undefined,
       );
       response = await callAgent(player, system, user);
     }
 
-    await addThought(player.name, response.thought);
-    await delay(600);
+    if (response.thought) {
+      await addThought(player.name, response.thought);
+      await delay(600);
+    }
 
     store().setActivePlayer(player.id, false);
     await addSpeech(player.name, response.speech);
 
     // Start prefetching next player during visual delay
-    const nextPlayer = alivePlayers[i + 1];
+    const nextPlayer = discussionOrder[i + 1];
     if (nextPlayer && store().isRunning) {
+      const nextIncludeThought = Math.random() * 100 < store().thoughtProbability;
       const { system, user } = buildDiscussionPrompt(
         nextPlayer,
         alivePlayers,
         store().logs,
         deathNames,
         dayCount,
+        nextIncludeThought,
+        getPlayerNightNotes(nextPlayer.name),
+        daySummary ?? undefined,
+      );
+      prefetchPromise = callAgent(nextPlayer, system, user);
+    }
+
+    await delay(store().speed);
+    store().setActivePlayer(null);
+  }
+
+  // ---- Rebuttal Round (Round 2) ----
+  store().setPhase('day_rebuttal');
+  addSystemLog(`🔥 Phiên phản biện bắt đầu! Hãy đáp trả và tạo liên minh!`);
+  await delay(store().speed);
+
+  prefetchPromise = null;
+  const rebuttalOrder = shuffle(alivePlayers);
+
+  for (let i = 0; i < rebuttalOrder.length; i++) {
+    if (!store().isRunning) return;
+    const player = rebuttalOrder[i];
+
+    store().setActivePlayer(player.id, true);
+    const includeThought = Math.random() * 100 < store().thoughtProbability;
+
+    let response: AgentResponse;
+    if (prefetchPromise) {
+      response = await prefetchPromise;
+      prefetchPromise = null;
+    } else {
+      const { system, user } = buildRebuttalPrompt(
+        player,
+        alivePlayers,
+        store().logs,
+        dayCount,
+        includeThought,
+        getPlayerNightNotes(player.name),
+        daySummary ?? undefined,
+      );
+      response = await callAgent(player, system, user);
+    }
+
+    if (response.thought) {
+      await addThought(player.name, response.thought);
+      await delay(600);
+    }
+
+    store().setActivePlayer(player.id, false);
+    await addSpeech(player.name, response.speech);
+
+    // Prefetch next
+    const nextPlayer = rebuttalOrder[i + 1];
+    if (nextPlayer && store().isRunning) {
+      const nextIncludeThought = Math.random() * 100 < store().thoughtProbability;
+      const { system, user } = buildRebuttalPrompt(
+        nextPlayer,
+        alivePlayers,
+        store().logs,
+        dayCount,
+        nextIncludeThought,
         getPlayerNightNotes(nextPlayer.name),
         daySummary ?? undefined,
       );
@@ -267,17 +433,19 @@ async function dayPhase() {
   store().setPhase('day_voting');
   store().resetVotes();
   addSystemLog(
-    '🗳️ Phiên bỏ phiếu bắt đầu! Mỗi người hãy chọn ai sẽ bị treo cổ.',
+    '🗳️ Phiên bỏ phiếu bắt đầu! Mỗi người hãy chọn ai sẽ bị trục xuất.',
   );
   await delay(store().speed);
 
   prefetchPromise = null;
+  const voteOrder = shuffle(alivePlayers);
 
-  for (let i = 0; i < alivePlayers.length; i++) {
+  for (let i = 0; i < voteOrder.length; i++) {
     if (!store().isRunning) return;
-    const player = alivePlayers[i];
+    const player = voteOrder[i];
 
     store().setActivePlayer(player.id, true);
+    const includeThought = Math.random() * 100 < store().thoughtProbability;
 
     let response: AgentResponse;
     if (prefetchPromise) {
@@ -288,14 +456,16 @@ async function dayPhase() {
         player,
         alivePlayers,
         store().logs,
+        includeThought,
         getPlayerNightNotes(player.name),
-        daySummary ?? undefined,
       );
       response = await callAgent(player, system, user);
     }
 
-    await addThought(player.name, response.thought);
-    await delay(400);
+    if (response.thought) {
+      await addThought(player.name, response.thought);
+      await delay(400);
+    }
 
     store().setActivePlayer(player.id, false);
 
@@ -311,28 +481,34 @@ async function dayPhase() {
       store().castVote(player.id, target.id);
       addLog({
         sender: player.name,
-        content: `Vote: ${target.name}`,
+        content: `Chọn ${target.name}`,
         type: 'vote',
         phase: 'day_voting',
         dayCount,
       });
-      await addSpeech(
-        player.name,
-        response.speech || `Tôi vote cho ${target.name}.`,
-      );
+      if (response.speech) {
+        await addSpeech(player.name, response.speech);
+      } else {
+        await speakTTS(`Tôi chọn ${target.name}.`);
+      }
     } else {
-      await addSpeech(player.name, response.speech || 'Tôi bỏ phiếu trắng.');
+      if (response.speech) {
+        await addSpeech(player.name, response.speech);
+      } else {
+        await speakTTS('Tôi bỏ phiếu trắng.');
+      }
     }
 
     // Prefetch next voter
-    const nextPlayer = alivePlayers[i + 1];
+    const nextPlayer = voteOrder[i + 1];
     if (nextPlayer && store().isRunning) {
+      const nextIncludeThought = Math.random() * 100 < store().thoughtProbability;
       const { system, user } = buildVotePrompt(
         nextPlayer,
         alivePlayers,
         store().logs,
+        nextIncludeThought,
         getPlayerNightNotes(nextPlayer.name),
-        daySummary ?? undefined,
       );
       prefetchPromise = callAgent(nextPlayer, system, user);
     }
@@ -341,15 +517,66 @@ async function dayPhase() {
     store().setActivePlayer(null);
   }
 
+  // ---- Record vote history ----
+  store().addVoteRecord({
+    dayCount,
+    votes: { ...store().votes },
+    eliminated: null, // will be set after resolveVotes
+    nightDeaths: [...deaths],
+  });
+
   // ---- Execution ----
   store().setPhase('day_execution');
   const eliminatedId = store().resolveVotes();
 
+  // Update vote record with elimination result
+  const currentVoteHistory = store().voteHistory;
+  if (currentVoteHistory.length > 0) {
+    const lastRecord = currentVoteHistory[currentVoteHistory.length - 1];
+    lastRecord.eliminated = eliminatedId;
+  }
+
   if (eliminatedId) {
     const eliminated = store().players.find((p) => p.id === eliminatedId)!;
+
+    // Show vote tally
+    const tally: Record<string, number> = {};
+    for (const targetId of Object.values(store().votes)) {
+      tally[targetId] = (tally[targetId] || 0) + 1;
+    }
+    const tallyStr = Object.entries(tally)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, count]) => {
+        const p = store().players.find((pl) => pl.id === id);
+        return `${p?.name ?? id}: ${count} phiếu`;
+      })
+      .join(', ');
+    addSystemLog(`📊 Kết quả phiếu: ${tallyStr}`);
+
     addSystemLog(
-      `⚖️ Kết quả bỏ phiếu: ${eliminated.name} bị treo cổ! Vai trò: ${ROLE_INFO[eliminated.role].emoji} ${ROLE_INFO[eliminated.role].name}`,
+      `⚖️ ${eliminated.name} bị trục xuất! Vai trò: ${ROLE_INFO[eliminated.role].emoji} ${ROLE_INFO[eliminated.role].name}`,
     );
+
+    // ---- Last Words ----
+    store().setPhase('day_last_words');
+    store().setActivePlayer(eliminated.id, true);
+    addSystemLog(`🪦 ${eliminated.name} được nói lời cuối cùng…`);
+
+    const includeThought = Math.random() * 100 < store().thoughtProbability;
+    const { system: lwSystem, user: lwUser } = buildLastWordsPrompt(
+      eliminated,
+      alivePlayers.filter((p) => p.id !== eliminated.id),
+      store().logs,
+      includeThought,
+    );
+    const lwResponse = await callAgent(eliminated, lwSystem, lwUser);
+    if (lwResponse.thought) {
+      await addThought(eliminated.name, `[💀 Lời cuối] ${lwResponse.thought}`);
+      await delay(400);
+    }
+    await addSpeech(eliminated.name, `[🪦 Lời cuối] ${lwResponse.speech}`);
+    store().setActivePlayer(null);
+    await delay(store().speed);
 
     if (eliminated.role === 'hunter') {
       await hunterShot(eliminated);
@@ -380,17 +607,21 @@ async function wolfTurn() {
 
   for (const wolf of wolves) {
     store().setActivePlayer(wolf.id, true);
+    const includeThought = Math.random() * 100 < store().thoughtProbability;
 
     const { system, user } = buildWolfPrompt(
       wolf,
       alivePlayers,
       wolves,
       store().logs,
+      includeThought,
     );
     const response = await callAgent(wolf, system, user);
 
-    await addThought(wolf.name, `[🐺 Sói] ${response.thought}`);
-    await delay(400);
+    if (response.thought) {
+      await addThought(wolf.name, `[🐺 Sói] ${response.thought}`);
+      await delay(400);
+    }
 
     addLog({
       sender: wolf.name,
@@ -431,12 +662,15 @@ async function seerTurn() {
 
   addSystemLog('🔮 Tiên tri thức dậy…');
   store().setActivePlayer(seer.id, true);
+  const includeThought = Math.random() * 100 < store().thoughtProbability;
 
   const alivePlayers = store().players.filter((p) => p.alive);
-  const { system, user } = buildSeerPrompt(seer, alivePlayers, store().logs, []);
+  const { system, user } = buildSeerPrompt(seer, alivePlayers, store().logs, [], includeThought);
   const response = await callAgent(seer, system, user);
 
-  await addThought(seer.name, `[🔮 Tiên tri] ${response.thought}`);
+  if (response.thought) {
+    await addThought(seer.name, `[🔮 Tiên tri] ${response.thought}`);
+  }
 
   if (response.action) {
     const target = findPlayerByName(
@@ -464,16 +698,20 @@ async function guardTurn() {
 
   addSystemLog('🛡️ Bảo vệ thức dậy…');
   store().setActivePlayer(guard.id, true);
+  const includeThought = Math.random() * 100 < store().thoughtProbability;
 
   const alivePlayers = store().players.filter((p) => p.alive);
   const { system, user } = buildGuardPrompt(
     guard,
     alivePlayers,
     store().lastGuardTarget,
+    includeThought,
   );
   const response = await callAgent(guard, system, user);
 
-  await addThought(guard.name, `[🛡️ Bảo vệ] ${response.thought}`);
+  if (response.thought) {
+    await addThought(guard.name, `[🛡️ Bảo vệ] ${response.thought}`);
+  }
 
   if (response.action) {
     const target = findPlayerByName(response.action, alivePlayers);
@@ -494,6 +732,7 @@ async function witchTurn() {
 
   addSystemLog('🧙 Phù thủy thức dậy…');
   store().setActivePlayer(witch.id, true);
+  const includeThought = Math.random() * 100 < store().thoughtProbability;
 
   const alivePlayers = store().players.filter((p) => p.alive);
   const wolfTargetId = store().nightResult.wolfTarget;
@@ -507,10 +746,13 @@ async function witchTurn() {
     wolfTargetName,
     store().witchHasHeal,
     store().witchHasPoison,
+    includeThought,
   );
   const response = await callAgent(witch, system, user);
 
-  await addThought(witch.name, `[🧙 Phù thủy] ${response.thought}`);
+  if (response.thought) {
+    await addThought(witch.name, `[🧙 Phù thủy] ${response.thought}`);
+  }
 
   const action = response.action?.trim().toLowerCase() ?? '';
 
@@ -527,7 +769,7 @@ async function witchTurn() {
     if (target) {
       store().setWitchKill(target.id);
       await delay(400);
-      await addThought(witch.name, `[🧙] Đã dùng thuốc độc giết ${target.name}.`);
+      await addThought(witch.name, `[🧙] Đã dùng bình loại bỏ lên ${target.name}.`);
     }
   } else {
     await addThought(witch.name, '[🧙] Không dùng thuốc đêm nay.');
@@ -542,23 +784,26 @@ async function hunterShot(hunter: Player) {
   store().setActivePlayer(hunter.id, true);
 
   addSystemLog(
-    `🏹 ${hunter.name} là Thợ Săn! Được phép bắn 1 người trước khi chết.`,
+    `🏹 ${hunter.name} là Thợ Săn! Được phép kéo theo 1 người trước khi bị loại.`,
   );
 
+  const includeThought = Math.random() * 100 < store().thoughtProbability;
   const alivePlayers = store().players.filter(
     (p) => p.alive && p.id !== hunter.id,
   );
-  const { system, user } = buildHunterPrompt(hunter, alivePlayers);
+  const { system, user } = buildHunterPrompt(hunter, alivePlayers, includeThought);
   const response = await callAgent(hunter, system, user);
 
-  await addThought(hunter.name, `[🏹 Thợ Săn] ${response.thought}`);
+  if (response.thought) {
+    await addThought(hunter.name, `[🏹 Thợ Săn] ${response.thought}`);
+  }
 
   if (response.action) {
     const target = findPlayerByName(response.action, alivePlayers);
     if (target) {
       store().killPlayer(target.id);
       addSystemLog(
-        `🏹 ${hunter.name} đã bắn chết ${target.name}! (${ROLE_INFO[target.role].emoji} ${ROLE_INFO[target.role].name})`,
+        `🏹 ${hunter.name} đã kéo theo ${target.name}! (${ROLE_INFO[target.role].emoji} ${ROLE_INFO[target.role].name})`,
       );
     }
   }
@@ -606,7 +851,7 @@ async function addThought(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(content);
+  await speakTTS(content, true);
 }
 
 async function addSpeech(playerName: string, content: string) {
@@ -618,7 +863,7 @@ async function addSpeech(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(content);
+  await speakTTS(content, false);
 }
 
 function addLog(msg: Omit<ChatMessage, 'id' | 'timestamp'>) {

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useGameStore } from '@/store/gameStore';
-import { runGameLoop } from '@/lib/game/engine';
-import { ApiLogEntry, ChatMessage, Role, ROLE_INFO, GamePhase } from '@/lib/types';
+import { runGameLoop, runReplay } from '@/lib/game/engine';
+import { ApiLogEntry, ChatMessage, Role, ROLE_INFO, GamePhase, DayVoteRecord, Player } from '@/lib/types';
+import GameScene3D from '@/components/GameScene3D';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -18,9 +19,11 @@ const PHASE_LABELS: Record<GamePhase, string> = {
   night_witch: '🧙 Phù thủy',
   day_announcement: '☀️ Thông báo',
   day_discussion: '💬 Thảo luận',
+  day_rebuttal: '🔥 Phản biện',
   day_voting: '🗳️ Bỏ phiếu',
   day_execution: '⚖️ Hành hình',
-  hunter_shot: '🏹 Thợ săn bắn',
+  day_last_words: '🪦 Lời cuối',
+  hunter_shot: '🏹 Thợ săn kéo theo',
   game_over: '🏁 Kết thúc',
 };
 
@@ -45,13 +48,15 @@ function PlayerNode({
   isActive,
   isSpeaking,
 }: {
-  player: { id: string; name: string; role: Role; alive: boolean };
+  player: Player;
   isActive: boolean;
   isSpeaking: boolean;
 }) {
   const roleInfo = ROLE_INFO[player.role];
   const color = ROLE_HEX[player.role];
   const isDead = !player.alive;
+  // Extract short model name
+  const shortModel = player.model.split('/').pop()?.replace(':free', '') || player.model;
 
   return (
     <div
@@ -84,6 +89,19 @@ function PlayerNode({
         style={{ color: isDead ? '#6b7280' : color }}
       >
         {roleInfo.name}
+      </span>
+      {/* Model badge */}
+      <span
+        className="text-[8px] text-gray-500 max-w-[80px] truncate bg-gray-800/60 px-1.5 py-0.5 rounded-full"
+        title={`${player.provider}: ${player.model}`}
+      >
+        {shortModel}
+      </span>
+      <span
+        className="text-[9px] text-gray-400 max-w-[80px] text-center leading-tight line-clamp-2"
+        title={player.personality}
+      >
+        {player.personality?.split(' - ')[0] || 'Bình thường'}
       </span>
       {isSpeaking && (
         <span className="text-[10px] text-green-400 animate-pulse" aria-label="Speaking" role="status">🔊</span>
@@ -167,6 +185,8 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   );
   const roleInfo = player ? ROLE_INFO[player.role] : null;
   const color = player ? ROLE_HEX[player.role] : null;
+  const shortModel = player?.model.split('/').pop()?.replace(':free', '') || '';
+  const personality = player?.personality?.split(' - ')[0] || '';
 
   if (msg.type === 'system') {
     return (
@@ -181,7 +201,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.type === 'thought') {
     return (
       <div className="my-1 ml-1">
-        <div className="flex items-center gap-1 text-[11px] mb-0.5">
+        <div className="flex items-center gap-1 text-[11px] mb-0.5 flex-wrap">
           <span style={{ color: color ?? '#a855f7' }}>
             {roleInfo?.emoji ?? '🧠'}
           </span>
@@ -199,6 +219,16 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
               {roleInfo.name}
             </span>
           )}
+          {personality && (
+            <span className="text-[9px] text-purple-400/60 bg-purple-900/30 px-1 rounded">
+              {personality}
+            </span>
+          )}
+          {shortModel && (
+            <span className="text-[8px] text-gray-500 bg-gray-800/50 px-1 rounded">
+              {shortModel}
+            </span>
+          )}
           <span className="text-gray-500 italic text-[10px]">nghĩ</span>
         </div>
         <div className="bg-purple-900/15 border border-purple-800/25 text-purple-200/70 text-xs px-2.5 py-1.5 rounded-lg rounded-tl-none italic ml-3 max-w-sm">
@@ -211,9 +241,19 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.type === 'whisper') {
     return (
       <div className="my-1 ml-1">
-        <div className="flex items-center gap-1 text-[11px] mb-0.5">
+        <div className="flex items-center gap-1 text-[11px] mb-0.5 flex-wrap">
           <span className="text-red-400">🐺</span>
           <span className="font-semibold text-red-400">{msg.sender}</span>
+          {personality && (
+            <span className="text-[9px] text-red-400/60 bg-red-900/30 px-1 rounded">
+              {personality}
+            </span>
+          )}
+          {shortModel && (
+            <span className="text-[8px] text-gray-500 bg-gray-800/50 px-1 rounded">
+              {shortModel}
+            </span>
+          )}
           <span className="text-gray-500 italic text-[10px]">thì thầm</span>
         </div>
         <div className="bg-red-900/15 border border-red-800/20 text-red-200/70 text-xs px-2.5 py-1.5 rounded-lg rounded-tl-none ml-3 max-w-sm">
@@ -246,7 +286,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   // speech
   return (
     <div className="my-1 ml-1">
-      <div className="flex items-center gap-1 text-[11px] mb-0.5">
+      <div className="flex items-center gap-1 text-[11px] mb-0.5 flex-wrap">
         <span style={{ color: color ?? '#60a5fa' }}>
           {roleInfo?.emoji ?? '💬'}
         </span>
@@ -264,6 +304,16 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
             {roleInfo.name}
           </span>
         )}
+        {personality && (
+          <span className="text-[9px] text-blue-400/60 bg-blue-900/30 px-1 rounded">
+            {personality}
+          </span>
+        )}
+        {shortModel && (
+          <span className="text-[8px] text-gray-500 bg-gray-800/50 px-1 rounded">
+            {shortModel}
+          </span>
+        )}
       </div>
       <div className="bg-gray-700/30 border border-gray-600/30 text-gray-100/90 text-xs px-2.5 py-1.5 rounded-lg rounded-tl-none ml-3 max-w-sm">
         {msg.content}
@@ -275,6 +325,85 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 /* ------------------------------------------------------------------ */
 /*  FilterBar                                                          */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/*  VoteHistoryPanel                                                   */
+/* ------------------------------------------------------------------ */
+function VoteHistoryPanel() {
+  const voteHistory = useGameStore((s) => s.voteHistory);
+  const players = useGameStore((s) => s.players);
+
+  if (voteHistory.length === 0) {
+    return (
+      <div className="flex-1 overflow-y-auto rounded-xl bg-gray-900/75 border border-gray-700/50 px-3 py-2">
+        <div className="text-gray-600 text-center py-8 text-xs">Chưa có lịch sử vote</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto rounded-xl bg-gray-900/75 border border-gray-700/50 px-3 py-2 text-[11px]">
+      {voteHistory.map((record, idx) => {
+        // Build tally
+        const tally: Record<string, { count: number; voters: string[] }> = {};
+        Object.entries(record.votes).forEach(([voterId, targetId]) => {
+          if (!tally[targetId]) tally[targetId] = { count: 0, voters: [] };
+          tally[targetId].count++;
+          const voter = players.find((p) => p.id === voterId);
+          tally[targetId].voters.push(voter?.name ?? '?');
+        });
+        const sortedTally = Object.entries(tally).sort((a, b) => b[1].count - a[1].count);
+
+        return (
+          <div key={idx} className="mb-3 p-2 rounded-lg bg-gray-800/40 border border-gray-700/30">
+            <div className="font-semibold text-gray-300 mb-1.5">📅 Ngày {record.dayCount}</div>
+
+            {/* Night deaths */}
+            {record.nightDeaths.length > 0 && (
+              <div className="text-red-300/80 mb-1">
+                💀 Bị loại đêm:{' '}
+                {record.nightDeaths.map((id) => {
+                  const p = players.find((pl) => pl.id === id);
+                  return p ? `${p.name} (${ROLE_INFO[p.role].emoji})` : id;
+                }).join(', ')}
+              </div>
+            )}
+
+            {/* Vote details */}
+            <div className="space-y-1">
+              {sortedTally.map(([targetId, data]) => {
+                const target = players.find((p) => p.id === targetId);
+                const isEliminated = record.eliminated === targetId;
+                return (
+                  <div key={targetId} className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded ${isEliminated ? 'bg-red-900/20 border border-red-800/30' : ''}`}>
+                    <span className="text-orange-400 font-bold w-4 text-center">{data.count}</span>
+                    <span className="text-gray-500">→</span>
+                    <span className={`font-semibold ${isEliminated ? 'text-red-400' : 'text-gray-200'}`}>
+                      {target?.name ?? '?'} {isEliminated ? '💀' : ''}
+                    </span>
+                    <span className="text-gray-600 ml-auto text-[10px]">
+                      bởi: {data.voters.join(', ')}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Result */}
+            {record.eliminated ? (
+              <div className="text-red-400/80 mt-1 text-[10px]">
+                ⚖️ {players.find((p) => p.id === record.eliminated)?.name} bị trục xuất
+                ({ROLE_INFO[players.find((p) => p.id === record.eliminated)?.role ?? 'villager'].name})
+              </div>
+            ) : (
+              <div className="text-gray-500 mt-1 text-[10px]">⚖️ Hòa, không ai bị loại</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  ApiLogPanel                                                        */
 /* ------------------------------------------------------------------ */
@@ -411,8 +540,9 @@ function FilterBar({
 /* ------------------------------------------------------------------ */
 /*  Main Game Page                                                     */
 /* ------------------------------------------------------------------ */
-export default function GamePage() {
+function GamePageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const players = useGameStore((s) => s.players);
   const phase = useGameStore((s) => s.phase);
   const dayCount = useGameStore((s) => s.dayCount);
@@ -421,13 +551,23 @@ export default function GamePage() {
   const isRunning = useGameStore((s) => s.isRunning);
   const speed = useGameStore((s) => s.speed);
   const setSpeed = useGameStore((s) => s.setSpeed);
+  const thoughtProbability = useGameStore((s) => s.thoughtProbability);
+  const setThoughtProbability = useGameStore((s) => s.setThoughtProbability);
   const setRunning = useGameStore((s) => s.setRunning);
+  const exportSavedGame = useGameStore((s) => s.exportSavedGame);
+  const isReplayMode = useGameStore((s) => s.isReplayMode);
+  const isReplaying = useGameStore((s) => s.isReplaying);
+  const stopReplay = useGameStore((s) => s.stopReplay);
+  const replayLogs = useGameStore((s) => s.replayLogs);
+  const replayIndex = useGameStore((s) => s.replayIndex);
 
+  const isSimulating = useGameStore((s) => s.isSimulating);
   const [filter, setFilter] = useState<FilterType>('all');
-  const [showApiLog, setShowApiLog] = useState(false);
+  const [activeTab, setActiveTab] = useState<'chat' | 'api' | 'votes'>('chat');
   const ttsEnabled = useGameStore((s) => s.ttsEnabled);
   const setTtsEnabled = useGameStore((s) => s.setTtsEnabled);
   const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
+  const isThinkingTTS = useGameStore((s) => s.isThinkingTTS);
   const apiLogs = useGameStore((s) => s.apiLogs);
   const gameStartedRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -437,16 +577,35 @@ export default function GamePage() {
   }, [players, router]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs.length]);
+    if (!isSimulating) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs.length, isSimulating]);
 
   // start game loop (ref guard prevents double-fire in Strict Mode)
   useEffect(() => {
+    const isReplay = searchParams.get('replay') === 'true';
+    const runBackground = searchParams.get('background') !== 'false';
     if (players.length > 0 && !gameStartedRef.current) {
       gameStartedRef.current = true;
-      runGameLoop();
+      if (isReplay) {
+        runReplay();
+      } else {
+        runGameLoop(runBackground);
+      }
     }
-  }, [players]);
+  }, [players, searchParams]);
+
+  const handleDownload = () => {
+    const data = exportSavedGame();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `masoi_${new Date().toISOString().slice(0, 10)}_${data.winner}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Cancel queued TTS when disabled or unmounted
   useEffect(() => {
@@ -466,10 +625,24 @@ export default function GamePage() {
           : 'bg-gradient-to-br from-gray-900 via-amber-950/20 to-gray-900'
       } text-white`}
     >
-      {/* Dim overlay — only when TTS is speaking, does NOT cover the chat panel */}
+      {/* Simulation overlay */}
+      {isSimulating && (
+        <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-6xl mb-4 animate-spin" style={{ animationDuration: '3s' }}>🐺</div>
+            <div className="text-xl font-bold text-white mb-2">Đang mô phỏng trận đấu...</div>
+            <div className="text-sm text-gray-400">Các AI đang chơi, vui lòng đợi kết quả</div>
+            <div className="mt-4 text-xs text-gray-500">
+              {logs.length} sự kiện đã xử lý
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dim overlay — only when TTS is reading a thought, does NOT cover the chat panel */}
       <div
         className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-500 pointer-events-none ${
-          isSpeakingTTS ? 'opacity-100' : 'opacity-0'
+          isThinkingTTS ? 'opacity-100' : 'opacity-0'
         }`}
       />
 
@@ -487,9 +660,29 @@ export default function GamePage() {
             >
               {PHASE_LABELS[phase]}
             </span>
+            {isReplayMode && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-800 text-blue-200 hidden sm:inline">
+                🎬 Replay {replayIndex}/{replayLogs.length}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 md:gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400">
+            <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400" title="Tỉ lệ sinh suy nghĩ (tiết kiệm token)">
+              <span>🧠</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={10}
+                value={thoughtProbability}
+                onChange={(e) => setThoughtProbability(Number(e.target.value))}
+                className="w-16 accent-blue-500"
+              />
+              <span className="w-8 text-[10px]">
+                {thoughtProbability}%
+              </span>
+            </div>
+            <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400" title="Tốc độ game">
               <span>⏱</span>
               <input
                 type="range"
@@ -506,10 +699,20 @@ export default function GamePage() {
             </div>
             {!winner && (
               <button
-                onClick={() => setRunning(!isRunning)}
+                onClick={() => {
+                  if (isReplayMode) {
+                    if (isReplaying) {
+                      stopReplay();
+                    } else {
+                      runReplay();
+                    }
+                  } else {
+                    setRunning(!isRunning);
+                  }
+                }}
                 className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded-lg"
               >
-                {isRunning ? '⏸' : '▶️'}
+                {isReplayMode ? (isReplaying ? '⏸' : '▶️') : (isRunning ? '⏸' : '▶️')}
               </button>
             )}
             <button
@@ -536,11 +739,27 @@ export default function GamePage() {
       {/* Body */}
       <div className="max-w-[1400px] mx-auto px-3 md:px-4 py-3 flex flex-col md:flex-row gap-3 md:gap-4 md:h-[calc(100vh-48px)]">
         {/* Left: Arena */}
-        <div className="md:flex-1 flex flex-col items-center justify-center min-w-0">
-          <div className="w-full max-w-[320px] sm:max-w-[420px] md:max-w-[520px]">
-            <CircularArena />
+        <div className="md:flex-1 flex flex-col items-center justify-center min-w-0 relative">
+          <div className="w-full h-[40vh] md:h-full max-h-[600px]">
+            <GameScene3D />
           </div>
-          <div className="mt-2 md:mt-3 flex gap-4 text-xs text-gray-400">
+          
+          {/* Overlay Info */}
+          <div className="absolute top-4 left-4 z-10 pointer-events-none">
+            <div className="text-4xl mb-1 drop-shadow-lg">{night ? '🌙' : '☀️'}</div>
+            <div className="text-lg font-bold text-white drop-shadow-md">Ngày {dayCount}</div>
+            <div
+              className={`text-xs mt-1 px-3 py-1 rounded-full font-medium shadow-lg ${
+                night
+                  ? 'bg-indigo-900/80 text-indigo-200 border border-indigo-500/30'
+                  : 'bg-amber-900/80 text-amber-200 border border-amber-500/30'
+              }`}
+            >
+              {PHASE_LABELS[phase]}
+            </div>
+          </div>
+
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-4 text-xs text-gray-200 bg-black/40 backdrop-blur-sm px-4 py-2 rounded-full border border-white/10">
             <span>
               Sống:{' '}
               <b className="text-white">
@@ -565,28 +784,56 @@ export default function GamePage() {
         {/* Right: Chat / API Log — z-50 so it appears above the dim overlay */}
         <div className="relative z-50 md:w-[420px] flex-shrink-0 flex flex-col min-w-0 min-h-[200px] max-h-[45vh] md:max-h-none md:h-auto">
           <div className="flex items-center justify-between mb-1.5">
-            {showApiLog ? (
+            {activeTab === 'chat' ? (
+              <FilterBar active={filter} onChange={setFilter} />
+            ) : activeTab === 'api' ? (
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-gray-400 font-semibold">📡 API Log</span>
                 <span className="text-[10px] text-gray-600">{apiLogs.length} calls</span>
               </div>
             ) : (
-              <FilterBar active={filter} onChange={setFilter} />
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-gray-400 font-semibold">📊 Lịch sử Vote</span>
+              </div>
             )}
-            <button
-              onClick={() => setShowApiLog(!showApiLog)}
-              className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${
-                showApiLog
-                  ? 'bg-cyan-700 text-cyan-200'
-                  : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
-              }`}
-            >
-              {showApiLog ? '💬 Chat' : '📡 API'}
-            </button>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${
+                  activeTab === 'chat'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
+                }`}
+              >
+                💬
+              </button>
+              <button
+                onClick={() => setActiveTab('votes')}
+                className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${
+                  activeTab === 'votes'
+                    ? 'bg-orange-600 text-white'
+                    : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
+                }`}
+              >
+                📊
+              </button>
+              <button
+                onClick={() => setActiveTab('api')}
+                className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${
+                  activeTab === 'api'
+                    ? 'bg-cyan-700 text-cyan-200'
+                    : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
+                }`}
+              >
+                📡
+              </button>
+            </div>
           </div>
 
-          {showApiLog ? (
+          {activeTab === 'api' ? (
             <ApiLogPanel />
+          ) : activeTab === 'votes' ? (
+            <VoteHistoryPanel />
           ) : (
           <div className="flex-1 overflow-y-auto rounded-xl bg-gray-900/75 border border-gray-700/50 px-3 py-2">
             {filteredLogs.map((msg) => (
@@ -597,20 +844,56 @@ export default function GamePage() {
           )}
 
           {winner && (
-            <div
-              className={`mt-3 text-center py-3 rounded-xl font-bold text-lg animate-pulse ${
-                winner === 'wolf'
-                  ? 'bg-red-900/50 border-2 border-red-500 text-red-300'
-                  : 'bg-green-900/50 border-2 border-green-500 text-green-300'
-              }`}
-            >
-              {winner === 'wolf'
-                ? '🐺 BẦY SÓI THẮNG!'
-                : '👥 DÂN LÀNG THẮNG!'}
+            <div className="mt-3 space-y-2">
+              <div
+                className={`text-center py-3 rounded-xl font-bold text-lg animate-pulse ${
+                  winner === 'wolf'
+                    ? 'bg-red-900/50 border-2 border-red-500 text-red-300'
+                    : 'bg-green-900/50 border-2 border-green-500 text-green-300'
+                }`}
+              >
+                {winner === 'wolf'
+                  ? '🐺 BẦY SÓI THẮNG!'
+                  : '👥 DÂN LÀNG THẮNG!'}
+              </div>
+              <div className="flex gap-2 justify-center">
+                {!isReplayMode && (
+                  <button
+                    onClick={handleDownload}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    📥 Lưu trận đấu
+                  </button>
+                )}
+                <button
+                  onClick={() => router.push('/')}
+                  className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  🏠 Về trang chủ
+                </button>
+              </div>
             </div>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Wrapper with Suspense boundary for useSearchParams                 */
+/* ------------------------------------------------------------------ */
+export default function GamePage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center text-white">
+        <div className="text-center">
+          <div className="text-4xl mb-4 animate-bounce">🐺</div>
+          <div>Đang tải...</div>
+        </div>
+      </div>
+    }>
+      <GamePageContent />
+    </Suspense>
   );
 }

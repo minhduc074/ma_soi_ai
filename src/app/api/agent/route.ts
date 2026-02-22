@@ -15,7 +15,7 @@ interface AgentRequestBody {
 /*  OpenRouter key info + retry helper                                */
 /* ------------------------------------------------------------------ */
 
-const OPENROUTER_RETRY_CODES = new Set([429, 500, 503]);
+const OPENROUTER_RETRY_CODES = new Set([429, 500, 503, 524]);
 
 interface OpenRouterKeyData {
   label: string;
@@ -45,7 +45,7 @@ async function callOpenRouterWithRetry(
   model: string,
   system: string,
   user: string,
-  maxRetries = 3,
+  maxRetries = 10,
 ): Promise<string> {
   const baseUrl = 'https://openrouter.ai/api/v1';
   let lastErr = '';
