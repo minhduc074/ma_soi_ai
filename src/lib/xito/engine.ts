@@ -1,4 +1,5 @@
 import { useXitoStore } from '@/store/xitoStore';
+import { assignPlayerVoices, getVoice } from '@/lib/tts/voice';
 import {
   callXitoAgent,
   buildBettingPrompt,
@@ -24,7 +25,21 @@ let _backgroundMode = false;
 /* helper: wait for `ms` milliseconds (skipped in background mode) */
 const delay = (ms: number) => _backgroundMode ? Promise.resolve() : new Promise((r) => setTimeout(r, ms));
 
-/* helper: find and cache the best Vietnamese voice */
+const PIPER_TTS_URL = 'http://localhost:5500/tts';
+let piperAvailable: boolean | null = null;
+
+async function checkPiper(): Promise<boolean> {
+  if (piperAvailable !== null) return piperAvailable;
+  try {
+    const r = await fetch('http://localhost:5500/health', { signal: AbortSignal.timeout(800) });
+    piperAvailable = r.ok;
+  } catch {
+    piperAvailable = false;
+  }
+  return piperAvailable;
+}
+
+/* helper: find and cache the best Vietnamese voice (fallback) */
 let cachedViVoice: SpeechSynthesisVoice | null | undefined;
 function getVietnameseVoice(): SpeechSynthesisVoice | null {
   if (cachedViVoice !== undefined) return cachedViVoice;
@@ -41,30 +56,57 @@ function getVietnameseVoice(): SpeechSynthesisVoice | null {
 }
 
 if (typeof window !== 'undefined' && window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => {
-    cachedViVoice = undefined;
-  };
+  window.speechSynthesis.onvoiceschanged = () => { cachedViVoice = undefined; };
 }
 
-/* helper: speak text via Web Speech API */
-function speakTTS(text: string, isThought = false): Promise<void> {
+/* helper: speak text — Piper TTS nếu có, fallback Web Speech API */
+function speakTTS(text: string, isThought = false, voice?: string): Promise<void> {
   if (_backgroundMode) return Promise.resolve();
   const { ttsEnabled, setIsSpeakingTTS } = useXitoStore.getState();
-  if (!ttsEnabled || typeof window === 'undefined' || !window.speechSynthesis) {
-    return Promise.resolve();
-  }
-  const cleanText = text.replace(/^\[[^\]]+\]\s*/, '').trim();
+  if (!ttsEnabled || typeof window === 'undefined') return Promise.resolve();
+  const cleanText = text.replace(/^\[[^\]]+\]\s*/, '').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F]/gu, '').trim();
   if (!cleanText) return Promise.resolve();
+
   setIsSpeakingTTS(true);
-  return new Promise<void>((resolve) => {
-    const u = new SpeechSynthesisUtterance(cleanText);
-    u.lang = 'vi-VN';
-    const voice = getVietnameseVoice();
-    if (voice) u.voice = voice;
-    u.rate = 1.25;
-    u.onend = () => { setIsSpeakingTTS(false); resolve(); };
-    u.onerror = () => { setIsSpeakingTTS(false); resolve(); };
-    window.speechSynthesis.speak(u);
+
+  return checkPiper().then((hasPiper) => {
+    if (hasPiper) {
+      // Edge Neural TTS — phát qua AudioContext (MP3)
+      return fetch(PIPER_TTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cleanText, voice }),
+      })
+        .then((r) => r.arrayBuffer())
+        .then((buf) => {
+          const ctx = new AudioContext();
+          return ctx.decodeAudioData(buf).then((decoded) => {
+            const src = ctx.createBufferSource();
+            src.buffer = decoded;
+            src.connect(ctx.destination);
+            src.start();
+            return new Promise<void>((resolve) => {
+              src.onended = () => { setIsSpeakingTTS(false); ctx.close(); resolve(); };
+            });
+          });
+        })
+        .catch(() => {
+          piperAvailable = false;
+          setIsSpeakingTTS(false);
+        });
+    }
+
+    if (!window.speechSynthesis) { setIsSpeakingTTS(false); return; }
+    return new Promise<void>((resolve) => {
+      const u = new SpeechSynthesisUtterance(cleanText);
+      u.lang = 'vi-VN';
+      const voice = getVietnameseVoice();
+      if (voice) u.voice = voice;
+      u.rate = 1.25;
+      u.onend = () => { setIsSpeakingTTS(false); resolve(); };
+      u.onerror = () => { setIsSpeakingTTS(false); resolve(); };
+      window.speechSynthesis.speak(u);
+    });
   });
 }
 
@@ -76,6 +118,9 @@ export async function runXitoLoop(backgroundMode = false) {
   const store = useXitoStore.getState;
 
   if (backgroundMode) store().setSimulating(true);
+
+  // Gán giọng cho từng nhân vật dựa theo tên
+  await assignPlayerVoices(store().players);
 
   addSystemLog('🎰 Ván Xì Tố bắt đầu!');
   await delay(store().speed);
@@ -621,7 +666,7 @@ async function addThought(playerName: string, content: string, expression?: stri
     phase: store.phase,
     roundCount: store.roundCount,
   });
-  await speakTTS(content, true);
+  await speakTTS(content, true, getVoice(playerName));
 }
 
 async function addSpeech(playerName: string, content: string, expression?: string) {
@@ -634,5 +679,5 @@ async function addSpeech(playerName: string, content: string, expression?: strin
     phase: store.phase,
     roundCount: store.roundCount,
   });
-  await speakTTS(content, false);
+  await speakTTS(content, false, getVoice(playerName));
 }

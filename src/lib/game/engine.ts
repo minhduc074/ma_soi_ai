@@ -1,4 +1,5 @@
 import { useGameStore } from '@/store/gameStore';
+import { assignPlayerVoices, getVoice } from '@/lib/tts/voice';
 import {
   callAgent,
   buildWolfPrompt,
@@ -31,6 +32,21 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /* helper: find and cache the best Vietnamese voice */
+const PIPER_TTS_URL = 'http://localhost:5500/tts';
+let piperAvailable: boolean | null = null;
+
+async function checkPiper(): Promise<boolean> {
+  if (piperAvailable !== null) return piperAvailable;
+  try {
+    const r = await fetch('http://localhost:5500/health', { signal: AbortSignal.timeout(800) });
+    piperAvailable = r.ok;
+  } catch {
+    piperAvailable = false;
+  }
+  return piperAvailable;
+}
+
+/* helper: find and cache the best Vietnamese voice (fallback) */
 let cachedViVoice: SpeechSynthesisVoice | null | undefined; // undefined = not yet searched
 function getVietnameseVoice(): SpeechSynthesisVoice | null {
   if (cachedViVoice !== undefined) return cachedViVoice;
@@ -43,42 +59,64 @@ function getVietnameseVoice(): SpeechSynthesisVoice | null {
     voices.find((v) => v.lang === 'vi-VN') ??
     voices.find((v) => v.lang.startsWith('vi')) ??
     null;
-  if (cachedViVoice) {
-    console.log('[TTS] Using Vietnamese voice:', cachedViVoice.name, cachedViVoice.lang);
-  } else {
-    console.warn('[TTS] No Vietnamese voice found. Available voices:', voices.map((v) => `${v.name} (${v.lang})`).join(', '));
-  }
   return cachedViVoice;
 }
 
-// Reset voice cache when voices list changes (loaded async on some browsers)
 if (typeof window !== 'undefined' && window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => {
-    cachedViVoice = undefined;
-  };
+  window.speechSynthesis.onvoiceschanged = () => { cachedViVoice = undefined; };
 }
 
-/* helper: speak text via Web Speech API and wait for it to finish */
-function speakTTS(text: string, isThought = false): Promise<void> {
+/* helper: speak text — Piper TTS nếu có, fallback Web Speech API */
+function speakTTS(text: string, isThought = false, voice?: string): Promise<void> {
   if (_backgroundMode) return Promise.resolve();
   const { ttsEnabled, setIsSpeakingTTS, setIsThinkingTTS } = useGameStore.getState();
-  if (!ttsEnabled || typeof window === 'undefined' || !window.speechSynthesis) {
-    return Promise.resolve();
-  }
-  // Strip role/label prefixes like [🐺 Sói], [🔮 Kết quả soi], etc.
-  const cleanText = text.replace(/^\[[^\]]+\]\s*/, '').trim();
+  if (!ttsEnabled || typeof window === 'undefined') return Promise.resolve();
+  // Strip role/label prefixes like [🐺 Sói], [🔮 Kết quả soi], etc. and remove emojis
+  const cleanText = text.replace(/^\[[^\]]+\]\s*/, '').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F]/gu, '').trim();
   if (!cleanText) return Promise.resolve();
+
   setIsSpeakingTTS(true);
   setIsThinkingTTS(isThought);
-  return new Promise<void>((resolve) => {
-    const u = new SpeechSynthesisUtterance(cleanText);
-    u.lang = 'vi-VN';
-    const voice = getVietnameseVoice();
-    if (voice) u.voice = voice;
-    u.rate = 1.25;
-    u.onend = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
-    u.onerror = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
-    window.speechSynthesis.speak(u);
+
+  return checkPiper().then((hasPiper) => {
+    if (hasPiper) {
+      // Edge Neural TTS — phát qua AudioContext (MP3)
+      return fetch(PIPER_TTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cleanText, voice }),
+      })
+        .then((r) => r.arrayBuffer())
+        .then((buf) => {
+          const ctx = new AudioContext();
+          return ctx.decodeAudioData(buf).then((decoded) => {
+            const src = ctx.createBufferSource();
+            src.buffer = decoded;
+            src.connect(ctx.destination);
+            src.start();
+            return new Promise<void>((resolve) => {
+              src.onended = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); ctx.close(); resolve(); };
+            });
+          });
+        })
+        .catch(() => {
+          piperAvailable = false;
+          setIsSpeakingTTS(false);
+          setIsThinkingTTS(false);
+        });
+    }
+
+    if (!window.speechSynthesis) { setIsSpeakingTTS(false); setIsThinkingTTS(false); return; }
+    return new Promise<void>((resolve) => {
+      const u = new SpeechSynthesisUtterance(cleanText);
+      u.lang = 'vi-VN';
+      const voice = getVietnameseVoice();
+      if (voice) u.voice = voice;
+      u.rate = 1.25;
+      u.onend = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
+      u.onerror = () => { setIsSpeakingTTS(false); setIsThinkingTTS(false); resolve(); };
+      window.speechSynthesis.speak(u);
+    });
   });
 }
 
@@ -120,6 +158,9 @@ export async function runGameLoop(backgroundMode = false) {
   const store = useGameStore.getState;
 
   if (backgroundMode) store().setSimulating(true);
+
+  // Gán giọng cho từng nhân vật dựa theo tên
+  await assignPlayerVoices(store().players);
 
   addSystemLog('🎮 Trò chơi Ma Sói bắt đầu! Đêm đầu tiên đang đến…');
 
@@ -346,6 +387,7 @@ async function dayPhase() {
     }
 
     store().setActivePlayer(player.id, false);
+    if (response.expression) store().setPlayerExpression(player.name, response.expression);
     await addSpeech(player.name, response.speech);
 
     // Start prefetching next player during visual delay
@@ -407,6 +449,7 @@ async function dayPhase() {
     }
 
     store().setActivePlayer(player.id, false);
+    if (response.expression) store().setPlayerExpression(player.name, response.expression);
     await addSpeech(player.name, response.speech);
 
     // Prefetch next
@@ -468,6 +511,7 @@ async function dayPhase() {
     }
 
     store().setActivePlayer(player.id, false);
+    if (response.expression) store().setPlayerExpression(player.name, response.expression);
 
     const targetName = response.action?.trim();
     const target = targetName
@@ -665,7 +709,13 @@ async function seerTurn() {
   const includeThought = Math.random() * 100 < store().thoughtProbability;
 
   const alivePlayers = store().players.filter((p) => p.alive);
-  const { system, user } = buildSeerPrompt(seer, alivePlayers, store().logs, [], includeThought);
+  const { system, user } = buildSeerPrompt(
+    seer,
+    alivePlayers,
+    store().logs,
+    store().seerHistory.map((h) => ({ target: h.targetName, result: h.result === 'wolf' ? '🐺 Sói' : '👤 Dân làng', day: h.day })),
+    includeThought,
+  );
   const response = await callAgent(seer, system, user);
 
   if (response.thought) {
@@ -680,6 +730,7 @@ async function seerTurn() {
     if (target) {
       const result = target.role === 'werewolf' ? 'wolf' : 'village';
       store().setSeerTarget(target.id, result);
+      store().addSeerHistory({ targetName: target.name, result, day: store().dayCount });
       await delay(400);
       await addThought(
         seer.name,
@@ -716,7 +767,7 @@ async function guardTurn() {
   if (response.action) {
     const target = findPlayerByName(response.action, alivePlayers);
     if (target && target.name !== store().lastGuardTarget) {
-      store().setGuardTarget(target.id);
+      store().setGuardTarget(target.id, target.name);
       await delay(400);
       await addThought(guard.name, `[🛡️] Đã bảo vệ ${target.name}.`);
     }
@@ -851,7 +902,7 @@ async function addThought(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(content, true);
+  await speakTTS(content, true, getVoice(playerName));
 }
 
 async function addSpeech(playerName: string, content: string) {
@@ -863,7 +914,7 @@ async function addSpeech(playerName: string, content: string) {
     phase: store.phase,
     dayCount: store.dayCount,
   });
-  await speakTTS(content, false);
+  await speakTTS(content, false, getVoice(playerName));
 }
 
 function addLog(msg: Omit<ChatMessage, 'id' | 'timestamp'>) {

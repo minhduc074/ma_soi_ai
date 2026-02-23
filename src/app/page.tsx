@@ -35,14 +35,14 @@ const DEFAULT_OPENROUTER_KEY =
   process.env.NEXT_PUBLIC_OPENROUTER_API_KEY ?? '';
 
 const PRESET_PLAYERS: Array<{ name: string; model: string }> = [
-  { name: 'Trinity',   model: 'arcee-ai/trinity-large-preview:free' },
-  { name: 'Step-3.5',      model: 'stepfun/step-3.5-flash:free' },
-  { name: 'GLM-4.5',    model: 'z-ai/glm-4.5-air:free' },
-  { name: 'Trinity-mini',   model: 'arcee-ai/trinity-mini:free' },
-  { name: 'Nemotron-3',  model: 'nvidia/nemotron-3-nano-30b-a3b:free' },
-  { name: 'Meta-Llama',    model: 'meta-llama/llama-3.3-70b-instruct:free' },
-  { name: 'gpt-120b',    model: 'openai/gpt-oss-120b:free' },
-  { name: 'gpt-20b',   model: 'openai/gpt-oss-20b:free' },
+  { name: 'Quân',   model: 'arcee-ai/trinity-large-preview:free' },
+  { name: 'Uyên',      model: 'arcee-ai/trinity-large-preview:free' },
+  { name: 'Xuân',    model: 'google/gemma-3-27b-it:free' },
+  { name: 'Vy',   model: 'google/gemma-3-27b-it:free' },
+  { name: 'Minh',  model: 'openai/gpt-oss-120b:free' },
+  { name: 'Hà',    model: 'liquid/lfm-2.5-1.2b-thinking:free' },
+  { name: 'Trang',    model: 'liquid/lfm-2.5-1.2b-instruct:free' },
+  { name: 'Tùng',   model: 'nvidia/nemotron-3-nano-30b-a3b:free' },
 ];
 
 const PERSONALITIES = [

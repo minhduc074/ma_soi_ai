@@ -178,11 +178,13 @@ function Character3D({
   position,
   focusState,
   dimmed,
+  expression,
 }: {
   player: { id: string; name: string; role: Role; alive: boolean };
   position: [number, number, number];
   focusState: 'idle' | 'active' | 'speaking' | 'thinking';
   dimmed: boolean;
+  expression?: string;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const bodyRef = useRef<THREE.Group>(null);
@@ -399,6 +401,17 @@ function Character3D({
         >
           {player.name}
         </Text>
+        {/* Expression bubble */}
+        {expression && !isDead && (
+          <Text
+            position={[0, 0.55, 0]}
+            fontSize={0.35}
+            anchorX="center"
+            anchorY="middle"
+          >
+            {expression}
+          </Text>
+        )}
       </group>
       
       {/* Death effect */}
@@ -583,12 +596,13 @@ function CinematicCameraController({
     const dirX = x / norm;
     const dirZ = z / norm;
 
-    const shotDistance = isThinking ? 2.5 : isSpeaking ? 3.2 : 4;
+    // Zoom out more during speech to hide expression emoji (at y~2.45)
+    const shotDistance = isThinking ? 2.5 : isSpeaking ? 4.5 : 4;
     const sideOffset = isThinking ? 0.9 : 0.5;
     const camX = x + dirX * shotDistance - dirZ * sideOffset;
-    const camY = y + (isThinking ? 2.2 : 1.9);
+    const camY = y + (isThinking ? 2.2 : isSpeaking ? 2.6 : 1.9);
     const camZ = z + dirZ * shotDistance + dirX * sideOffset;
-    const lookY = y + (isThinking ? 1.3 : 1.1);
+    const lookY = y + (isThinking ? 1.3 : isSpeaking ? 0.8 : 1.1);
 
     controlsRef.current.setLookAt(camX, camY, camZ, x, lookY, z, true);
   }, [activePlayerId, isNight, isSpeaking, isThinking, playerPositions, players]);
@@ -614,6 +628,7 @@ export default function GameScene3D() {
   const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
   const isThinkingTTS = useGameStore((s) => s.isThinkingTTS);
   const phase = useGameStore((s) => s.phase);
+  const playerExpressions = useGameStore((s) => s.playerExpressions);
   const isNight = isNightPhase(phase);
 
   const total = players.length;
@@ -657,6 +672,7 @@ export default function GameScene3D() {
               position={playerPositions[index]}
               focusState={focusState}
               dimmed={dimmed}
+              expression={playerExpressions[player.name]}
             />
           );
         })}

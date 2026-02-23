@@ -95,9 +95,10 @@ export interface ChatMessage {
 }
 
 export interface AgentResponse {
-  thought?: string;   // inner monologue – shown to viewer only
-  speech: string;    // public statement – added to shared chat history
-  action?: string;   // e.g. target player name for night actions / vote
+  thought?: string;     // inner monologue – shown to viewer only
+  speech: string;       // public statement – added to shared chat history
+  action?: string;      // e.g. target player name for night actions / vote
+  expression?: string;  // visible emotion shown to all, e.g. "😰 lo lắng"
 }
 
 // ==================== API TRACKING LOG ====================
@@ -159,8 +160,10 @@ export interface GameState {
   // witch consumables
   witchHasHeal: boolean;
   witchHasPoison: boolean;
-  // guard memory
+  // guard memory (stores player NAME, not ID — for prompt comparison)
   lastGuardTarget: string | null;
+  // seer accumulated results across all nights
+  seerHistory: Array<{ targetName: string; result: 'wolf' | 'village'; day: number }>;
   // votes in current round
   votes: Record<string, string>; // voterId -> targetId
   // active player focus
@@ -180,4 +183,6 @@ export interface GameState {
   daySummary: string | null;
   // History of votes and eliminations per day
   voteHistory: DayVoteRecord[];
+  // Live expression per player (visible to all)
+  playerExpressions: Record<string, string>;
 }

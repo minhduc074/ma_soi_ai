@@ -1,0 +1,18 @@
+{
+  "name": "piper_tts_server",
+  "version": "1.0.0",
+  "description": "Server Python cục bộ dùng [Piper TTS](https://github.com/rhasspy/piper) để tổng hợp giọng Việt truyền cảm hơn giọng hệ thống.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "msedge-tts": "^2.0.4"
+  }
+}

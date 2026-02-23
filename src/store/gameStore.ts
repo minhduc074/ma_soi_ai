@@ -99,7 +99,8 @@ interface GameStore extends GameState {
   // night actions
   setWolfTarget: (targetId: string) => void;
   setSeerTarget: (targetId: string, result: 'wolf' | 'village') => void;
-  setGuardTarget: (targetId: string) => void;
+  setGuardTarget: (targetId: string, targetName: string) => void;
+  addSeerHistory: (entry: { targetName: string; result: 'wolf' | 'village'; day: number }) => void;
   setWitchSave: (save: boolean) => void;
   setWitchKill: (targetId: string | null) => void;
   resolveNight: () => string[]; // returns death ids
@@ -138,6 +139,8 @@ interface GameStore extends GameState {
   // Vote history
   voteHistory: DayVoteRecord[];
   addVoteRecord: (record: DayVoteRecord) => void;
+  // Player expressions
+  setPlayerExpression: (playerName: string, expression: string) => void;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -154,6 +157,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   witchHasHeal: true,
   witchHasPoison: true,
   lastGuardTarget: null,
+  seerHistory: [],
   votes: {},
   activePlayerId: null,
   isWhispering: false,
@@ -166,6 +170,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   isThinkingTTS: false,
   thoughtProbability: 40,
   voteHistory: [],
+  playerExpressions: {},
   replayLogs: [],
   replayIndex: 0,
   replayApiLogs: [],
@@ -189,6 +194,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       witchHasHeal: true,
       witchHasPoison: true,
       lastGuardTarget: null,
+      seerHistory: [],
       votes: {},
       activePlayerId: null,
       isWhispering: false,
@@ -196,6 +202,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       daySummary: null,
       isRunning: true,
       voteHistory: [],
+      playerExpressions: {},
       isSimulating: false,
       isReplayMode: false,
       isReplaying: false,
@@ -220,6 +227,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       witchHasHeal: true,
       witchHasPoison: true,
       lastGuardTarget: null,
+      seerHistory: [],
       votes: {},
       activePlayerId: null,
       isWhispering: false,
@@ -227,6 +235,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       daySummary: null,
       isRunning: true,
       voteHistory: [],
+      playerExpressions: {},
       isSimulating: false,
       isReplayMode: true,
       isReplaying: false,
@@ -275,11 +284,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       nightResult: { ...s.nightResult, seerTarget: targetId, seerResult: result },
     }));
   },
-  setGuardTarget(targetId) {
+  setGuardTarget(targetId, targetName) {
     set((s) => ({
       nightResult: { ...s.nightResult, guardTarget: targetId },
-      lastGuardTarget: targetId,
+      lastGuardTarget: targetName,
     }));
+  },
+  addSeerHistory(entry) {
+    set((s) => ({ seerHistory: [...s.seerHistory, entry] }));
   },
   setWitchSave(save) {
     set((s) => ({
@@ -527,5 +539,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   addVoteRecord(record) {
     set((s) => ({ voteHistory: [...s.voteHistory, record] }));
+  },
+  setPlayerExpression(playerName, expression) {
+    set((s) => ({ playerExpressions: { ...s.playerExpressions, [playerName]: expression } }));
   },
 }));

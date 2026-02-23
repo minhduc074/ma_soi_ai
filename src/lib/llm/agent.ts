@@ -43,11 +43,18 @@ function baseSystemPrompt(player: Player, alivePlayers: Player[], includeThought
     ? `\nĐÃ BỊ LOẠI: ${deadPlayers.map((p) => `${p.name} (${ROLE_INFO[p.role].name})`).join(', ')}\nKHÔNG được nhắc đến, cáo buộc, hay nói chuyện với người đã bị loại. Họ không còn trong game. CHỈ thảo luận về người CÒN SỐNG.`
     : '';
 
+  const aliveWolfTeammates = player.role === 'werewolf'
+    ? useGameStore.getState().players.filter((p) => p.alive && p.role === 'werewolf' && p.id !== player.id)
+    : [];
+  const wolfTeammateInfo = aliveWolfTeammates.length
+    ? `\n- Đồng đội sói CÒN SỐNG: ${aliveWolfTeammates.map((p) => p.name).join(', ')} — BẢO VỆ họ khi bầu chọn ban ngày, đừng vote hoặc tố cáo họ.`
+    : '';
+
   const wolfTactics = player.role === 'werewolf'
     ? `\nChiến thuật Phe Ma Sói:
 - Ngụy trang và đánh lạc hướng: Giỏi đánh lừa và ngụy trang vai trò của mình bằng cách hòa nhập với Dân Làng và tránh lộ diện.
 - Bảo vệ đồng đội: Nếu một Ma Sói bị nghi ngờ, những Ma Sói khác có thể hỗ trợ bằng cách đưa ra các lý do thuyết phục, làm sao để nghi ngờ hướng sang người khác.
-- Tạo sự hỗn loạn: Khi bị nghi ngờ, Ma Sói có thể tạo ra sự tranh luận hoặc phân tâm để khiến mọi người mất tập trung vào mục tiêu thực sự.`
+- Tạo sự hỗn loạn: Khi bị nghi ngờ, Ma Sói có thể tạo ra sự tranh luận hoặc phân tâm để khiến mọi người mất tập trung vào mục tiêu thực sự.${wolfTeammateInfo}`
     : `\nChiến thuật Phe Dân Làng:
 - Quan sát và phân tích: Chú ý đến biểu cảm, cử chỉ và cách nói chuyện của mọi người để tìm ra những điểm bất thường có thể gợi ý về danh tính của Ma Sói.
 - Hợp tác với vai trò đặc biệt: Những vai trò đặc biệt như Tiên tri và Bảo vệ nên kín đáo tiết lộ thông tin quan trọng khi cần, giúp bảo vệ các Dân Làng và loại bỏ Ma Sói nhanh chóng.
@@ -81,11 +88,12 @@ LƯU Ý KHI CHƠI:
 QUY TẮC OUTPUT:
 - Trả lời bằng tiếng Việt.
 - CHỈ trả lời đúng JSON, KHÔNG thêm gì khác:
-${includeThought ? '{"thought":"...","speech":"...","action":"..."}' : '{"speech":"...","action":"..."}'}
+${includeThought ? '{"thought":"...","speech":"...","action":"...","expression":"..."}' : '{"speech":"...","action":"...","expression":"..."}'}
 
 ${includeThought ? '- "thought": 1-2 câu suy nghĩ nội tâm ngắn gọn, KHÔNG dài dòng. Nói như đang chat, có cảm xúc.' : ''}
-- "speech": 1-3 câu nói tự nhiên, ngắn gọn đơn giản nhất có thể, như người thật nói chuyện. KHÔNG dài dòng. Nói như đang chat, có cảm xúc.
+- "speech": 1-2 câu nói tự nhiên, ngắn gọn đơn giản nhất có thể, như người thật nói chuyện. KHÔNG dài dòng. Nói như đang chat, có cảm xúc.
 - "action": tên người nếu cần chọn, hoặc bỏ trống.
+- "expression": 1 emoji thể hiện biểu cảm bạn đang THỰC SỰ có lúc này. VD: "😰", "😤", "🤔", "😌", "😏", "😨", "😮",... hoặc emoji nào cũng đc, miễn bạn thấy phù hợp nhất là đc (để lừa hoặc thể hiện cảm xúc). Người chơi khác NHÌN THẤY được biểu cảm này!
 - Nếu là SÓI, giả vờ dân làng. Đừng tiết lộ.
 - Có cá tính riêng, đừng lặp lại người khác.
 - Tất cả là bạn bè thân thiết, k cần phải sợ. Hãy sống thật với cảm xúc, dù nghi ngờ, sợ hãi, tức giận hay tự tin.`;
@@ -144,21 +152,22 @@ export function buildSeerPrompt(
   player: Player,
   alivePlayers: Player[],
   chatHistory: ChatMessage[],
-  previousResults: { target: string; result: string }[],
+  previousResults: { target: string; result: string; day?: number }[],
   includeThought: boolean,
 ): { system: string; user: string } {
   const system = baseSystemPrompt(player, alivePlayers, includeThought);
   const targets = alivePlayers.filter((p) => p.id !== player.id).map((p) => p.name).join(', ');
 
   const prevInfo = previousResults.length
-    ? previousResults.map((r) => `- ${r.target}: ${r.result}`).join('\n')
+    ? previousResults.map((r) => `- Đêm ${r.day ?? '?'}: ${r.target} → ${r.result}`).join('\n')
     : 'Chưa soi ai.';
 
   const recentChat = formatChatHistory(chatHistory.slice(-15));
 
   const user = `🔮 Đêm. Bạn là TIÊN TRI, tên "${player.name}" (KHÔNG được soi chính mình).
-Đã soi: ${prevInfo}
-Có thể soi: ${targets}
+NHỚ LẠI KẾT QUẢ SOI ĐÃ CÓ (bí mật, chỉ bạn biết):
+${prevInfo}
+Hãy ưu tiên soi những người CHƯA được soi. Có thể soi: ${targets}
 ${recentChat ? `Gần đây:\n${recentChat}\n` : ''}
 Chọn 1 người để soi. Đặt tên vào "action". JSON:`;
 
@@ -172,13 +181,15 @@ export function buildGuardPrompt(
   includeThought: boolean,
 ): { system: string; user: string } {
   const system = baseSystemPrompt(player, alivePlayers, includeThought);
+  // Guard CAN protect themselves, but cannot protect same person 2 consecutive nights
   const targets = alivePlayers
     .filter((p) => p.name !== lastGuardTarget)
     .map((p) => p.name)
     .join(', ');
 
   const user = `🛡️ Đêm. Bạn là BẢO VỆ.
-${lastGuardTarget ? `Đêm trước đã bảo vệ "${lastGuardTarget}", không được chọn lại.` : ''}
+Bạn CÓ THỂ tự bảo vệ chính mình.
+${lastGuardTarget ? `Đêm trước đã bảo vệ "${lastGuardTarget}" — KHÔNG được chọn lại người này liên tiếp.` : ''}
 Có thể bảo vệ: ${targets}
 Chọn 1 người. Đặt tên vào "action". JSON:`;
 
@@ -213,6 +224,17 @@ Cứu → action="save" | Loại bỏ → action="poison:TÊN" | Không → acti
 JSON:`;
 
   return { system, user };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helper: format visible expressions of alive players               */
+/* ------------------------------------------------------------------ */
+function formatVisibleExpressions(alivePlayers: Player[], excludeName?: string): string {
+  const expressions = useGameStore.getState().playerExpressions;
+  const entries = alivePlayers
+    .filter((p) => p.name !== excludeName && expressions[p.name])
+    .map((p) => `- ${p.name}: ${expressions[p.name]}`);
+  return entries.length ? entries.join('\n') : '';
 }
 
 export function buildDiscussionPrompt(
@@ -250,16 +272,43 @@ export function buildDiscussionPrompt(
   const voteHistory = useGameStore.getState().voteHistory;
   const voteCtx = formatVoteHistory(voteHistory, alivePlayers);
 
-  const user = `☀️ Ngày ${dayCount} – Thảo luận.
+  let user: string;
+
+  if (dayCount === 1) {
+    const deathLine = deaths.length
+      ? `⚠️ ${deathInfo} Những người này KHÔNG còn trong game.\n`
+      : '';
+    const expressionsCtx = formatVisibleExpressions(alivePlayers, player.name);
+    user = `☀️ Ngày 1 – Thảo luận mở đầu.
+Bạn là "${player.name}".
+${deathLine}Đây là ngày đầu tiên — chưa có vote, chưa có manh mối từ đêm trước.
+Mọi người đang quan sát lẫn nhau lần đầu.
+${expressionsCtx ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI (bạn CÓ THỂ THẤY):\n${expressionsCtx}\n` : ''}
+${privateNotes ? `\n📓 Ghi nhớ riêng (chỉ bạn biết):\n${privateNotes}\n` : ''}
+${currentRoundSpeeches ? `\n💬 Người khác vừa nói:\n${currentRoundSpeeches}\nHãy phản hồi hoặc đặt câu hỏi cho họ.\n` : ''}
+${recentChat ? `Cuộc trò chuyện vừa rồi:\n${recentChat}\n` : 'Bạn nói trước.\n'}
+QUAN SÁT VÀ SUY LUẬN:
+- Ai đang nói quá ít hoặc quá nhiều bất thường?
+- Ai tỏ ra quá tự tin hoặc né tránh bị hỏi?
+- Ai đang cố hướng sự chú ý sang người khác sớm quá?
+- Biểu cảm ai trông đáng ngờ?
+Đưa ra nhận xét đầu tiên về 1-2 người cụ thể, dù chỉ là cảm tính. GỌITÊN CỤ THỂ!
+speech 1-2 câu tự nhiên. action không cần.
+JSON:`;
+  } else {
+    const expressionsCtx = formatVisibleExpressions(alivePlayers, player.name);
+    user = `☀️ Ngày ${dayCount} – Thảo luận.
 Bạn là "${player.name}".
 ⚠️ ${deathInfo} Những người này KHÔNG còn trong game — đừng cáo buộc hay nói chuyện với họ.
 ${daySummary ? `\n📰 Tóm tắt (phân tích):\n${daySummary}\n` : ''}
 ${voteCtx ? `\n📊 LỊCH SỬ VOTE:\n${voteCtx}\n` : ''}
+${expressionsCtx ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI (bạn CÓ THỂ THẤY):\n${expressionsCtx}\n` : ''}
 ${privateNotes ? `\n📓 Ghi nhớ riêng của bạn (chỉ bạn biết):\n${privateNotes}\n` : ''}
 ${currentRoundSpeeches ? `\n💬 CÁC NGƯỜI CHƠI KHÁC VỪA NÓI TRONG VÒNG NÀY:\n${currentRoundSpeeches}\nHãy phản hồi lại ý kiến của họ.\n` : ''}
 ${recentChat ? `Cuộc trò chuyện gần đây:\n${recentChat}\n` : 'Bạn nói đầu tiên.\n'}
 CHỈ thảo luận về người CÒN SỐNG. HÃY chủ động: tố cáo, phản bác, hoặc bảo vệ bản thân. Gọi tên cụ thể! action không cần.
 JSON:`;
+  }
 
   return { system, user };
 }
@@ -291,14 +340,34 @@ export function buildVotePrompt(
 
   const voteHistory = useGameStore.getState().voteHistory;
   const voteCtx = formatVoteHistory(voteHistory, alivePlayers);
+  const currentDayCount = useGameStore.getState().dayCount;
 
-  const user = `🗳️ Vote loại 1 người. Bạn là "${player.name}" (KHÔNG được vote chính mình).
+  let user: string;
+
+  if (currentDayCount === 1) {
+    const expressionsCtx = formatVisibleExpressions(alivePlayers, player.name);
+    user = `🗳️ Vote đầu tiên. Bạn là "${player.name}" (KHÔNG vote chính mình).
+Ứng viên: ${candidates}
+Đây là lần vote đầu — chưa có lịch sử vote, hãy dựa vào:
+- Ai đã nói những điều bất thường hoặc mâu thuẫn trong thảo luận vừa rồi
+- Ai bị nhiều người nghi ngờ nhất, và lý do có đáng tin không
+- Linh cảm của bạn từ cách mọi người phản ứng
+${expressionsCtx ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI:\n${expressionsCtx}\n` : ''}
+${privateNotes ? `\n📓 Ghi nhớ riêng:\n${privateNotes}\n` : ''}
+${currentRoundSpeeches ? `\n💬 Người khác vừa nói:\n${currentRoundSpeeches}\n` : ''}
+${recentChat ? `Thảo luận:\n${recentChat}\n` : ''}
+PHẢI chọn 1 người — không được bỏ phiếu trắng nếu có thể. Đặt tên vào "action". JSON:`;
+  } else {
+    const expressionsCtx = formatVisibleExpressions(alivePlayers, player.name);
+    user = `🗳️ Vote loại 1 người. Bạn là "${player.name}" (KHÔNG được vote chính mình).
 Ứng viên: ${candidates}
 ${voteCtx ? `📊 LỊCH SỬ VOTE:\n${voteCtx}\n` : ''}
+${expressionsCtx ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI:\n${expressionsCtx}\n` : ''}
 ${privateNotes ? `📓 Ghi nhớ riêng:\n${privateNotes}\n` : ''}
 ${currentRoundSpeeches ? `\n💬 CÁC NGƯỜI CHƠI KHÁC VỪA NÓI TRONG VÒNG VOTE NÀY:\n${currentRoundSpeeches}\nHãy phản hồi lại ý kiến của họ.\n` : ''}
 ${recentChat ? `Thảo luận:\n${recentChat}\n` : ''}
 CHỈ CẦN CHỌN MỤC TIÊU VOTE. Đặt tên vào "action". "thought" và "speech" có thể để trống. JSON:`;
+  }
 
   return { system, user };
 }
@@ -333,6 +402,8 @@ Tập trung vào:
 2. Ai đang bị nghi ngờ nhất và tại sao.
 3. Liên minh nào đang hình thành.
 4. Mâu thuẫn đáng chú ý giữa các người chơi.
+5. Dự đoán ngắn gọn về ai có thể là sói dựa trên hành vi và lịch sử vote.
+6. tóm tắt ngắn gọn last words của người bị loại đêm qua (nếu có).
 
 KHÔNG liệt kê lại chi tiết ai vote ai — thông tin đó đã có sẵn ở chỗ khác.
 CHỈ dùng thông tin công khai (không tiết lộ vai trò người đang sống).
@@ -449,9 +520,28 @@ export function buildRebuttalPrompt(
   const voteHistory = useGameStore.getState().voteHistory;
   const voteCtx = formatVoteHistory(voteHistory, alivePlayers);
 
-  const user = `🔥 Ngày ${dayCount} – PHẢN BIỆN (vòng 2).
+  let user: string;
+
+  if (dayCount === 1) {
+    user = `🔥 Ngày 1 – Phản biện lần đầu.
+Bạn là "${player.name}".
+Ngày đầu tiên — chưa có bằng chứng chắc chắn, nhưng áp lực đang tăng.
+${(() => { const e = formatVisibleExpressions(alivePlayers, player.name); return e ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI:\n${e}\n` : ''; })()}
+${privateNotes ? `\n📓 Ghi nhớ riêng:\n${privateNotes}\n` : ''}
+${currentRoundSpeeches ? `\n💬 Người khác vừa nói:\n${currentRoundSpeeches}\nHãy phản hồi trực tiếp.\n` : ''}
+${recentChat ? `Thảo luận vừa rồi:\n${recentChat}\n` : ''}
+Hãy:
+- Phản bác nếu có người nghi ngờ bạn — bảo vệ bản thân thuyết phục
+- Hoặc tiếp tục dồn người bạn đang nghi — đặt câu hỏi khó
+- Tạo liên minh ban đầu với ai bạn tin tưởng
+speech 1-2 câu mạnh mẽ. action không cần.
+JSON:`;
+  } else {
+    const expressionsCtx = formatVisibleExpressions(alivePlayers, player.name);
+    user = `🔥 Ngày ${dayCount} – PHẢN BIỆN (vòng 2).
 Bạn là "${player.name}".
 ${voteCtx ? `\n📊 LỊCH SỬ VOTE:\n${voteCtx}\n` : ''}
+${expressionsCtx ? `\n👁️ BIỂU CẢM CỦA MỌI NGƯỜI:\n${expressionsCtx}\n` : ''}
 ${privateNotes ? `\n📓 Ghi nhớ riêng:\n${privateNotes}\n` : ''}
 ${currentRoundSpeeches ? `\n💬 CÁC NGƯỜI CHƠI KHÁC VỪA NÓI TRONG VÒNG PHẢN BIỆN NÀY:\n${currentRoundSpeeches}\nHãy phản hồi lại ý kiến của họ.\n` : ''}
 ${recentChat ? `Thảo luận vòng 1:\n${recentChat}\n` : ''}
@@ -460,8 +550,9 @@ ${recentChat ? `Thảo luận vòng 1:\n${recentChat}\n` : ''}
 - Chỉ ra mâu thuẫn trong lời nói của người khác
 - Kêu gọi liên minh vote ai đó cụ thể
 - Nếu bị dồn, hãy tự bảo vệ mạnh mẽ hoặc đổ tội sang người khác
-speech 1-3 câu, mạnh mẽ và quyết liệt. action không cần.
+speech 1-2 câu, mạnh mẽ và quyết liệt. action không cần.
 JSON:`;
+  }
 
   return { system, user };
 }
@@ -484,7 +575,7 @@ ${recentChat ? `Thảo luận gần đây:\n${recentChat}\n` : ''}
 - Nếu là DÂN/vai trò tốt: tiết lộ thông tin hữu ích cho đồng đội (ai bạn nghi là sói, kết quả soi nếu là tiên tri)
 - Nếu là SÓI: lừa lần cuối — đổ tội cho dân vô tội, gây rối loạn, hoặc giả vờ là vai trò tốt
 - Thể hiện cảm xúc tức giận, tiếc nuối, hoặc thỏa mãn
-speech 1-3 câu cuối cùng đầy cảm xúc. action không cần.
+speech 1-2 câu cuối cùng đầy cảm xúc. action không cần.
 JSON:`;
 
   return { system, user };

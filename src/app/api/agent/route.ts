@@ -245,7 +245,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
     }
 
-    console.log(`[agent] ✓ ${provider}/${model} +${Date.now() - t0}ms raw=${raw.slice(0, 120).replace(/\n/g, ' ')}`);
+    console.log(`[agent] ✓ ${provider}/${model} +${Date.now() - t0}ms raw=${raw.slice(0, 200).replace(/\n/g, ' ')}`);
 
     // Try to extract JSON from response
     const normalized = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
@@ -255,8 +255,105 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔' });
     }
 
+    // Helper: attempt to repair common JSON issues
+    const repairJSON = (jsonStr: string): string => {
+      let working = jsonStr.trim();
+      
+      // Step 1: Handle nested JSON - if "speech" contains a JSON object, extract it
+      const nestedMatch = working.match(/"speech":\s*"(\{[^}]*\})"/);
+      if (nestedMatch) {
+        const inner = nestedMatch[1];
+        if (inner.includes('"thought"') || inner.includes('"action"')) {
+          working = inner;
+        }
+      }
+      
+      // Step 2: Fix unescaped newlines - replace literal newlines between quotes with \n
+      // Use a state machine to track if we're inside a string value
+      const chars = working.split('');
+      const result: string[] = [];
+      let inString = false;
+      let afterColon = false;
+      let escapeNext = false;
+      
+      for (let i = 0; i < chars.length; i++) {
+        const char = chars[i];
+        const prev = i > 0 ? chars[i - 1] : '';
+        
+        if (escapeNext) {
+          result.push(char);
+          escapeNext = false;
+          continue;
+        }
+        
+        if (char === '\\') {
+          result.push(char);
+          escapeNext = true;
+          continue;
+        }
+        
+        if (char === '"' && prev !== '\\') {
+          result.push(char);
+          if (afterColon) {
+            inString = !inString;
+            if (!inString) afterColon = false;
+          } else {
+            inString = !inString;
+          }
+          continue;
+        }
+        
+        if (char === ':' && !inString) {
+          result.push(char);
+          afterColon = true;
+          continue;
+        }
+        
+        // Replace control characters when inside string values
+        if (inString && afterColon) {
+          if (char === '\n') {
+            result.push('\\n');
+          } else if (char === '\r') {
+            result.push('\\r');
+          } else if (char === '\t') {
+            result.push('\\t');
+          } else if (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) {
+            // Skip other control characters
+            continue;
+          } else {
+            result.push(char);
+          }
+        } else {
+          result.push(char);
+        }
+      }
+      
+      working = result.join('');
+      
+      // Step 3: Fix missing commas between properties
+      working = working.replace(/"\s+"([a-zA-Z_]+)":/g, '", "$1":');
+      working = working.replace(/([}\]])\s+"([a-zA-Z_]+)":/g, '$1, "$2":');
+      working = working.replace(/([0-9])\s+"([a-zA-Z_]+)":/g, '$1, "$2":');
+      
+      // Step 4: Parse and keep only valid fields
+      try {
+        const parsed = JSON.parse(working);
+        const validFields = ['thought', 'speech', 'action', 'expression', 'raiseAmount'];
+        const cleaned: Record<string, unknown> = {};
+        for (const field of validFields) {
+          if (field in parsed) {
+            cleaned[field] = parsed[field];
+          }
+        }
+        return JSON.stringify(cleaned);
+      } catch {
+        return working;
+      }
+    };
+
+    let jsonStr = jsonMatch[0];
     try {
-      const parsed = JSON.parse(jsonMatch[0]) as ParsedAgentPayload;
+      const parsed = JSON.parse(jsonStr) as ParsedAgentPayload;
       return NextResponse.json({
         thought: typeof parsed.thought === 'string' ? parsed.thought : '',
         speech: typeof parsed.speech === 'string' ? parsed.speech : '',
@@ -265,8 +362,23 @@ export async function POST(request: NextRequest) {
         raiseAmount: typeof parsed.raiseAmount === 'number' ? parsed.raiseAmount : 0,
       });
     } catch (parseErr) {
-      console.warn(`[agent] JSON parse failed: ${parseErr}, returning raw text`);
-      return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔', raiseAmount: 0 });
+      // Try repairing the JSON
+      console.warn(`[agent] JSON parse failed: ${parseErr}, attempting repair`);
+      try {
+        const repairedStr = repairJSON(jsonStr);
+        console.log(`[agent] repaired JSON attempt: ${repairedStr.slice(0, 300)}`);
+        const parsed = JSON.parse(repairedStr) as ParsedAgentPayload;
+        return NextResponse.json({
+          thought: typeof parsed.thought === 'string' ? parsed.thought : '',
+          speech: typeof parsed.speech === 'string' ? parsed.speech : '',
+          action: typeof parsed.action === 'string' ? parsed.action : '',
+          expression: typeof parsed.expression === 'string' ? parsed.expression : '🤔',
+          raiseAmount: typeof parsed.raiseAmount === 'number' ? parsed.raiseAmount : 0,
+        });
+      } catch (repairErr) {
+        console.warn(`[agent] JSON repair failed: ${repairErr}, returning raw text`);
+        return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔', raiseAmount: 0 });
+      }
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

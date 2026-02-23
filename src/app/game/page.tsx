@@ -47,10 +47,12 @@ function PlayerNode({
   player,
   isActive,
   isSpeaking,
+  expression,
 }: {
   player: Player;
   isActive: boolean;
   isSpeaking: boolean;
+  expression?: string;
 }) {
   const roleInfo = ROLE_INFO[player.role];
   const color = ROLE_HEX[player.role];
@@ -60,7 +62,7 @@ function PlayerNode({
 
   return (
     <div
-      className={`flex flex-col items-center gap-0.5 transition-all duration-300 ${
+      className={`relative flex flex-col items-center gap-0.5 transition-all duration-300 ${
         isActive ? 'scale-110' : 'scale-100'
       } ${isDead ? 'opacity-40 grayscale' : ''}`}
     >
@@ -106,6 +108,14 @@ function PlayerNode({
       {isSpeaking && (
         <span className="text-[10px] text-green-400 animate-pulse" aria-label="Speaking" role="status">🔊</span>
       )}
+      {expression && !isDead && (
+        <div className="absolute -top-6 left-1/2 -translate-x-1/2 z-30 animate-bounce">
+          <div className="relative bg-white/90 text-gray-900 text-[11px] font-bold px-2 py-1 rounded-xl shadow-lg whitespace-nowrap border border-gray-200">
+            {expression}
+            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white/90 rotate-45 border-b border-r border-gray-200"></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -120,6 +130,7 @@ function CircularArena() {
   const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
   const phase = useGameStore((s) => s.phase);
   const dayCount = useGameStore((s) => s.dayCount);
+  const playerExpressions = useGameStore((s) => s.playerExpressions);
   const night = isNightPhase(phase);
 
   const total = players.length;
@@ -168,7 +179,7 @@ function CircularArena() {
             }`}
             style={{ left: `${x}%`, top: `${y}%` }}
           >
-            <PlayerNode player={player} isActive={active} isSpeaking={speaking} />
+          <PlayerNode player={player} isActive={active} isSpeaking={speaking} expression={playerExpressions[player.name]} />
           </div>
         );
       })}
