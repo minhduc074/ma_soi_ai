@@ -6,6 +6,7 @@ import { useGameStore } from '@/store/gameStore';
 import { runGameLoop, runReplay } from '@/lib/game/engine';
 import { ApiLogEntry, ChatMessage, Role, ROLE_INFO, GamePhase, DayVoteRecord, Player } from '@/lib/types';
 import GameScene3D from '@/components/GameScene3D';
+import GameScene2D from '@/components/GameScene2D';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -575,6 +576,7 @@ function GamePageContent() {
   const isSimulating = useGameStore((s) => s.isSimulating);
   const [filter, setFilter] = useState<FilterType>('all');
   const [activeTab, setActiveTab] = useState<'chat' | 'api' | 'votes'>('chat');
+  const [use3D, setUse3D] = useState(false); // Default to 2D for better compatibility
   const ttsEnabled = useGameStore((s) => s.ttsEnabled);
   const setTtsEnabled = useGameStore((s) => s.setTtsEnabled);
   const isSpeakingTTS = useGameStore((s) => s.isSpeakingTTS);
@@ -752,8 +754,16 @@ function GamePageContent() {
         {/* Left: Arena */}
         <div className="md:flex-1 flex flex-col items-center justify-center min-w-0 relative">
           <div className="w-full h-[40vh] md:h-full max-h-[600px]">
-            <GameScene3D />
+            {use3D ? <GameScene3D /> : <GameScene2D />}
           </div>
+          
+          {/* 2D/3D Toggle */}
+          <button
+            onClick={() => setUse3D(!use3D)}
+            className="absolute top-4 right-4 z-20 px-3 py-1.5 rounded-lg bg-black/50 hover:bg-black/70 text-white text-sm font-medium backdrop-blur-sm border border-white/20 transition-all"
+          >
+            {use3D ? '🎮 3D' : '🖼️ 2D'}
+          </button>
           
           {/* Overlay Info */}
           <div className="absolute top-4 left-4 z-10 pointer-events-none">

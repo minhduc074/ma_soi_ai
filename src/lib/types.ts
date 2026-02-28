@@ -54,7 +54,6 @@ export interface PlayerConfig {
   name: string;
   provider: LLMProvider;
   model: string;
-  apiKey: string;
   baseUrl?: string; // custom base URL for CLIProxyAPI
   personality?: string; // random personality trait
 }

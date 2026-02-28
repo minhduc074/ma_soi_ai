@@ -44,8 +44,6 @@ async function fetchAgent(
     body: JSON.stringify({
       provider: player.provider,
       model: player.model,
-      apiKey: player.apiKey,
-      baseUrl: player.baseUrl,
       systemPrompt,
       userPrompt,
     }),

@@ -775,10 +775,25 @@ export default function XitoScene3D() {
   return (
     <div className="w-full h-full min-h-[300px] rounded-xl overflow-hidden border border-gray-700/50 shadow-2xl bg-gray-900">
       <Canvas 
-        shadows 
+        shadows={{ type: THREE.PCFShadowMap }}
         camera={{ position: [0, 11, 12], fov: 45 }}
-        gl={{ antialias: false, alpha: false, powerPreference: 'high-performance' }}
+        gl={{ 
+          antialias: false, 
+          alpha: false, 
+          powerPreference: 'high-performance',
+          failIfMajorPerformanceCaveat: false,
+          preserveDrawingBuffer: true,
+        }}
         dpr={1}
+        onCreated={({ gl }) => {
+          gl.domElement.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            console.warn('WebGL context lost, will attempt recovery...');
+          });
+          gl.domElement.addEventListener('webglcontextrestored', () => {
+            console.log('WebGL context restored');
+          });
+        }}
       >
         <color attach="background" args={['#0a0510']} />
         

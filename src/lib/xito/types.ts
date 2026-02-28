@@ -331,7 +331,6 @@ export interface XitoPlayerConfig {
   name: string;
   provider: LLMProvider;
   model: string;
-  apiKey: string;
   baseUrl?: string;
   personality?: string;
 }

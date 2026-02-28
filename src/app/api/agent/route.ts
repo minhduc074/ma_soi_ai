@@ -2,13 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60; // allow up to 60s for slow models
 
+// Server-side only - get API key from environment
+function getApiKey(provider: string): string {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY || '';
+    case 'gemini':
+      return process.env.GEMINI_API_KEY || '';
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY || '';
+    case 'openrouter':
+      return process.env.OPENROUTER_API_KEY || '';
+    case 'cliproxyapi':
+      return process.env.CLIPROXYAPI_API_KEY || '';
+    default:
+      return '';
+  }
+}
+
+// Get default provider and model from environment
+function getDefaultConfig(): { provider: string; model: string; baseUrl: string } {
+  return {
+    provider: process.env.LLM_PROVIDER || 'openrouter',
+    model: process.env.LLM_MODEL || 'google/gemini-2.0-flash-exp:free',
+    baseUrl: process.env.CLIPROXYAPI_BASE_URL || 'http://127.0.0.1:8317/v1',
+  };
+}
+
 interface AgentRequestBody {
-  provider: 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'cliproxyapi';
-  model: string;
-  apiKey: string;
+  provider?: 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'cliproxyapi';
+  model?: string;
   systemPrompt: string;
   userPrompt: string;
-  baseUrl?: string; // custom base URL for cliproxyapi
 }
 
 interface ParsedAgentPayload {
@@ -204,21 +229,31 @@ async function callAnthropic(apiKey: string, model: string, system: string, user
 
 export async function POST(request: NextRequest) {
   const t0 = Date.now();
-  let provider = '?';
-  let model = '?';
+  const defaults = getDefaultConfig();
+  let provider: string = defaults.provider;
+  let model: string = defaults.model;
 
   try {
     const body: AgentRequestBody = await request.json();
-    ({ provider, model } = body);
-    const { apiKey, systemPrompt, userPrompt } = body;
+    
+    // Use provided values or fall back to defaults
+    provider = body.provider || defaults.provider;
+    model = body.model || defaults.model;
+    const { systemPrompt, userPrompt } = body;
+    
+    // Get API key from environment (never from client)
+    const apiKey = getApiKey(provider);
 
     console.log(`[agent] → ${provider}/${model}`);
 
-    if (!provider || !model || !apiKey || !systemPrompt || !userPrompt) {
-      const missing = ['provider','model','apiKey','systemPrompt','userPrompt']
-        .filter((k) => !body[k as keyof AgentRequestBody]);
-      console.error(`[agent] 400 missing fields: ${missing.join(', ')}`);
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!systemPrompt || !userPrompt) {
+      console.error(`[agent] 400 missing prompts`);
+      return NextResponse.json({ error: 'Missing required fields: systemPrompt, userPrompt' }, { status: 400 });
+    }
+
+    if (!apiKey) {
+      console.error(`[agent] 400 no API key configured for provider: ${provider}`);
+      return NextResponse.json({ error: `No API key configured for provider: ${provider}` }, { status: 400 });
     }
 
     let raw: string;
@@ -230,7 +265,7 @@ export async function POST(request: NextRequest) {
         raw = await callOpenRouterWithRetry(apiKey, model, systemPrompt, userPrompt);
         break;
       case 'cliproxyapi': {
-        const base = body.baseUrl || 'http://127.0.0.1:8317/v1';
+        const base = defaults.baseUrl;
         raw = await callOpenAICompatible(base, apiKey, model, systemPrompt, userPrompt);
         break;
       }
