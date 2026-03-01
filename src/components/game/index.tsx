@@ -506,7 +506,7 @@ export interface GameCardProps {
   description: string;
   emoji: string;
   href: string;
-  color: 'red' | 'green' | 'purple' | 'blue';
+  color: 'red' | 'green' | 'purple' | 'blue' | 'amber' | 'slate' | 'rose';
   players: string;
   features: string[];
   isSelected?: boolean;
@@ -548,6 +548,24 @@ export function GameCard({
       shadow: 'shadow-blue-500/20',
       ring: 'ring-blue-500',
       bg: 'bg-blue-500/10',
+    },
+    amber: {
+      gradient: 'from-amber-600 to-yellow-500',
+      shadow: 'shadow-amber-500/20',
+      ring: 'ring-amber-500',
+      bg: 'bg-amber-500/10',
+    },
+    slate: {
+      gradient: 'from-slate-500 to-gray-600',
+      shadow: 'shadow-slate-500/20',
+      ring: 'ring-slate-500',
+      bg: 'bg-slate-500/10',
+    },
+    rose: {
+      gradient: 'from-rose-600 to-red-500',
+      shadow: 'shadow-rose-500/20',
+      ring: 'ring-rose-500',
+      bg: 'bg-rose-500/10',
     },
   };
 

@@ -22,7 +22,7 @@ import { GameCard, PlayerSetupCard } from '@/components/game';
 /* ------------------------------------------------------------------ */
 /*  Types & Constants                                                  */
 /* ------------------------------------------------------------------ */
-type GameMode = 'werewolf' | 'blackjack' | 'xito';
+type GameMode = 'werewolf' | 'blackjack' | 'xito' | 'caro' | 'chess' | 'xiangqi';
 
 const PROVIDERS: { value: string; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
@@ -93,6 +93,33 @@ const GAMES = [
     color: 'purple' as const,
     players: '2-6',
     features: ['Stud Poker', 'Bet/Raise/All-in', 'Bluff AI', 'Tâm lý chiến'],
+  },
+  {
+    id: 'caro' as GameMode,
+    title: 'Caro',
+    emoji: '⭕',
+    description: 'Gomoku 5 quân trên bàn 15x15. AI suy nghĩ chiến thuật để đạt 5 liên tiếp!',
+    color: 'amber' as const,
+    players: '2',
+    features: ['15x15 board', 'AI vs AI', 'Human vs AI', '3D Scene'],
+  },
+  {
+    id: 'chess' as GameMode,
+    title: 'Cờ Vua',
+    emoji: '♟️',
+    description: 'Chess kinh điển với AI đấu nhau. Xem AI tính toán nước cờ và bình luận!',
+    color: 'slate' as const,
+    players: '2',
+    features: ['Chess.js', 'AI vs AI', 'Human vs AI', '3D Board'],
+  },
+  {
+    id: 'xiangqi' as GameMode,
+    title: 'Cờ Tướng',
+    emoji: '🐉',
+    description: 'Chinese Chess với AI Việt hóa. Sông Hán Sở, các quân tướng chiến đấu!',
+    color: 'rose' as const,
+    players: '2',
+    features: ['Xiangqi', 'AI vs AI', 'Human vs AI', 'Tướng/Sĩ/Tượng'],
   },
 ];
 
@@ -221,6 +248,15 @@ export default function HomePage() {
         );
         router.push(`/xito?background=${runInBackground}`);
         break;
+      case 'caro':
+        router.push('/caro');
+        break;
+      case 'chess':
+        router.push('/chess');
+        break;
+      case 'xiangqi':
+        router.push('/xiangqi');
+        break;
     }
   };
 
@@ -250,8 +286,9 @@ export default function HomePage() {
   };
 
   const selectedGame = GAMES.find((g) => g.id === gameMode)!;
+  const isBoardGame = ['caro', 'chess', 'xiangqi'].includes(gameMode);
   const minPlayers = gameMode === 'werewolf' ? 4 : 2;
-  const maxPlayers = gameMode === 'werewolf' ? 12 : gameMode === 'blackjack' ? 5 : 6;
+  const maxPlayers = gameMode === 'werewolf' ? 12 : gameMode === 'blackjack' ? 5 : isBoardGame ? 2 : 6;
 
   // Render: Game Selection
   if (step === 'select') {
@@ -286,13 +323,23 @@ export default function HomePage() {
 
           {/* Start Button */}
           <div className="text-center">
-            <Button
-              size="lg"
-              onClick={() => setStep('config')}
-              className="text-lg px-12 py-4"
-            >
-              Tiếp tục với {selectedGame.emoji} {selectedGame.title} →
-            </Button>
+            {isBoardGame ? (
+              <Button
+                size="lg"
+                onClick={() => startGame()}
+                className="text-lg px-12 py-4"
+              >
+                Chơi ngay {selectedGame.emoji} {selectedGame.title} →
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                onClick={() => setStep('config')}
+                className="text-lg px-12 py-4"
+              >
+                Tiếp tục với {selectedGame.emoji} {selectedGame.title} →
+              </Button>
+            )}
           </div>
 
           {/* Quick Replay */}

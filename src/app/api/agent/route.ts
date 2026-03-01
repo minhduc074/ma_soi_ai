@@ -284,8 +284,74 @@ export async function POST(request: NextRequest) {
 
     // Try to extract JSON from response
     const normalized = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
-    const jsonMatch = normalized.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    let jsonStr: string | null = null;
+    
+    // Regex-based field extraction for deeply broken responses
+    const extractFieldsByRegex = (text: string): ParsedAgentPayload | null => {
+      const extract = (field: string): string | undefined => {
+        // Match "field": "value" — handles multi-char emoji values
+        const m = text.match(new RegExp(`"${field}"\\s*:\\s*"([^"]*?)"`, 's'));
+        return m?.[1];
+      };
+      const action = extract('action');
+      const speech = extract('speech');
+      const thought = extract('thought');
+      const expression = extract('expression');
+      const raiseMatch = text.match(/"raiseAmount"\s*:\s*(\d+)/);
+      if (!action && !speech && !thought) return null;
+      return { action: action ?? '', speech: speech ?? '', thought: thought ?? '', expression: expression ?? '🤔', raiseAmount: raiseMatch ? parseInt(raiseMatch[1]) : 0 };
+    };
+    
+    // Try to find JSON object with proper nesting
+    const findJSON = (text: string): string | null => {
+      let braceCount = 0;
+      let inString = false;
+      let escapeNext = false;
+      let start = -1;
+      
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        
+        if (escapeNext) {
+          escapeNext = false;
+          continue;
+        }
+        
+        if (char === '\\') {
+          escapeNext = true;
+          continue;
+        }
+        
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        
+        if (!inString) {
+          if (char === '{') {
+            if (braceCount === 0) start = i;
+            braceCount++;
+          } else if (char === '}') {
+            braceCount--;
+            if (braceCount === 0 && start !== -1) {
+              return text.substring(start, i + 1);
+            }
+          }
+        }
+      }
+      
+      return null;
+    };
+    
+    jsonStr = findJSON(normalized);
+    // If not found, try closing truncated JSON (LLM cut off mid-response)
+    if (!jsonStr) {
+      for (const suffix of ['"}\'', '"}', '}']) {
+        jsonStr = findJSON(normalized + suffix);
+        if (jsonStr) break;
+      }
+    }
+    if (!jsonStr) {
       console.warn(`[agent] no JSON in response, returning raw text`);
       return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔' });
     }
@@ -293,6 +359,9 @@ export async function POST(request: NextRequest) {
     // Helper: attempt to repair common JSON issues
     const repairJSON = (jsonStr: string): string => {
       let working = jsonStr.trim();
+      
+      // Step 0: Sanitize corrupted emoji sequences - remove control characters and replacement chars
+      working = working.replace(/[\p{C}\uFFFD]/gu, '');
       
       // Step 1: Handle nested JSON - if "speech" contains a JSON object, extract it
       const nestedMatch = working.match(/"speech":\s*"(\{[^}]*\})"/);
@@ -365,12 +434,16 @@ export async function POST(request: NextRequest) {
       
       working = result.join('');
       
-      // Step 3: Fix missing commas between properties
+      // Step 3: Fix unquoted emoji values - wrap emojis that appear unquoted after colons in quotes
+      // Regex to find `: <emoji>` patterns and wrap the emoji in quotes: `: "<emoji>"`
+      working = working.replace(/:\s*([\p{Emoji_Presentation}\p{Extended_Pictographic}][^\s,}]*)/gu, ': "$1"');
+      
+      // Step 4: Fix missing commas between properties
       working = working.replace(/"\s+"([a-zA-Z_]+)":/g, '", "$1":');
       working = working.replace(/([}\]])\s+"([a-zA-Z_]+)":/g, '$1, "$2":');
       working = working.replace(/([0-9])\s+"([a-zA-Z_]+)":/g, '$1, "$2":');
       
-      // Step 4: Parse and keep only valid fields
+      // Step 5: Parse and keep only valid fields
       try {
         const parsed = JSON.parse(working);
         const validFields = ['thought', 'speech', 'action', 'expression', 'raiseAmount'];
@@ -386,7 +459,6 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    let jsonStr = jsonMatch[0];
     try {
       const parsed = JSON.parse(jsonStr) as ParsedAgentPayload;
       return NextResponse.json({
@@ -411,7 +483,20 @@ export async function POST(request: NextRequest) {
           raiseAmount: typeof parsed.raiseAmount === 'number' ? parsed.raiseAmount : 0,
         });
       } catch (repairErr) {
-        console.warn(`[agent] JSON repair failed: ${repairErr}, returning raw text`);
+        // Last resort: extract fields via regex
+        console.warn(`[agent] JSON repair failed: ${repairErr}, attempting regex field extraction`);
+        const extracted = extractFieldsByRegex(jsonStr);
+        if (extracted) {
+          console.log(`[agent] regex extraction succeeded: action=${extracted.action}`);
+          return NextResponse.json({
+            thought: extracted.thought ?? '',
+            speech: extracted.speech ?? '',
+            action: extracted.action ?? '',
+            expression: extracted.expression ?? '🤔',
+            raiseAmount: extracted.raiseAmount ?? 0,
+          });
+        }
+        console.warn(`[agent] all parsing failed, returning raw text`);
         return NextResponse.json({ thought: '', speech: normalized, action: '', expression: '🤔', raiseAmount: 0 });
       }
     }
