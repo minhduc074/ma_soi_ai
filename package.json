@@ -12,9 +12,11 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@types/three": "^0.183.1",
+    "chess.js": "^1.4.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "sl-wukong-engine": "^1.0.0",
     "three": "^0.183.1",
     "zustand": "^5.0.11"
   },
